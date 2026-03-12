@@ -258,7 +258,12 @@ server.tool(
   { path: z.string().describe("Vault-relative path to the note.") },
   async ({ path: noteName }) => {
     const raw = await fs.readFile(notePath(noteName), "utf-8");
-    return { content: [{ type: "text", text: JSON.stringify(matter(raw).data, null, 2) }] };
+    const data = matter(raw).data;
+    // Normalize Date objects to YYYY-MM-DD strings
+    const normalized = Object.fromEntries(
+      Object.entries(data).map(([k, v]) => [k, v instanceof Date ? formatDate(v) : v])
+    );
+    return { content: [{ type: "text", text: JSON.stringify(normalized, null, 2) }] };
   }
 );
 
@@ -1084,7 +1089,9 @@ server.tool(
     for (const file of files) {
       const { data } = matter(await fs.readFile(file, "utf-8"));
       if (data[date_field]) {
-        entries.push({ rel: toRelative(file), date: String(data[date_field]), data });
+        const raw = data[date_field];
+        const date = raw instanceof Date ? formatDate(raw) : String(raw).slice(0, 10);
+        entries.push({ rel: toRelative(file), date, data });
       }
     }
 
