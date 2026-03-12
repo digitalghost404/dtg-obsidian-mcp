@@ -1,114 +1,126 @@
-# dtg-obsidian-mcp
+# 🧠 dtg-obsidian-mcp
 
-An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that gives Claude direct read/write access to an [Obsidian](https://obsidian.md) vault. Supports note management, frontmatter editing, wikilink graph traversal, AI-powered knowledge features, daily notes, templates, dataview-style queries, vault health reporting, and more.
+> Give Claude direct, intelligent access to your Obsidian vault.
 
-**40 tools across 8 categories.**
+**dtg-obsidian-mcp** is a [Model Context Protocol](https://modelcontextprotocol.io) server that connects Claude to your Obsidian vault — not just as a file reader, but as a true knowledge assistant. Ask Claude to find gaps in your knowledge graph, generate flashcards, cluster your notes by theme, trace paths between ideas, audit your vault's health, and much more.
 
-## Tools
+**56 tools across 9 categories.**
+
+---
+
+## ✨ What makes this different
+
+Most Obsidian integrations stop at read/write. This server goes further:
+
+- 🔍 **Graph intelligence** — trace the shortest wikilink path between any two notes, find your most-linked hub notes, detect orphans and broken links
+- 🤖 **AI-ready knowledge tools** — extract concepts, suggest missing links, generate MOCs, cluster notes by theme, compare ideas side-by-side
+- ✍️ **Writing assistance** — generate Anki flashcards, compile glossaries, flag unsourced claims, extract all blockquotes
+- 📊 **Dataview-style queries** — filter notes by any frontmatter field with rich operators, get chronological timelines
+- 🏥 **Vault health** — score every note on a quality rubric, find duplicates, get a full weekly review report
+
+---
+
+## 🛠 Tools
 
 ### Note Management
-
 | Tool | Description |
 |------|-------------|
-| `list_notes` | List all notes in the vault, optionally filtered by folder |
+| `list_notes` | List all notes, optionally filtered by folder |
 | `read_note` | Read the full content of a note |
-| `write_note` | Create or overwrite a note (creates parent folders automatically) |
+| `write_note` | Create or overwrite a note (auto-creates parent folders) |
 | `delete_note` | Delete a note by path |
 | `rename_note` | Rename or move a note to a new path |
-| `append_to_note` | Append content to a note without overwriting it |
-| `patch_note` | Find and replace text within a note (first occurrence or all) |
+| `append_to_note` | Append content without overwriting |
+| `patch_note` | Find and replace text (first match or all occurrences) |
 
-### Frontmatter / Metadata
-
+### Frontmatter & Metadata
 | Tool | Description |
 |------|-------------|
 | `get_frontmatter` | Return a note's YAML frontmatter as structured JSON |
-| `set_frontmatter` | Update specific frontmatter fields (preserves existing fields) |
-| `list_tags` | Aggregate all tags across the vault with usage counts |
+| `set_frontmatter` | Update specific fields while preserving the rest |
+| `list_tags` | Aggregate every tag in the vault with usage counts |
 
 ### Links & Graph
-
 | Tool | Description |
 |------|-------------|
 | `get_outgoing_links` | List all `[[wikilinks]]` in a note |
-| `get_backlinks` | Find all notes that link to a given note |
-| `get_orphans` | List notes with no incoming or outgoing links |
+| `get_backlinks` | Find every note that links to a given note |
+| `get_orphans` | Find notes with no incoming or outgoing links |
 
 ### Folders
-
 | Tool | Description |
 |------|-------------|
 | `list_folders` | List all folders in the vault |
 | `create_folder` | Create a folder (and any missing parents) |
-| `delete_folder` | Delete a folder (safe by default; `force: true` for recursive delete) |
+| `delete_folder` | Delete a folder — safe by default, `force: true` for recursive |
 
-### Daily Notes
-
+### Daily Notes & Templates
 | Tool | Description |
 |------|-------------|
-| `get_daily_note` | Read the daily note for today or a specific date |
+| `get_daily_note` | Read today's (or any date's) daily note |
 | `create_daily_note` | Create a daily note, optionally from a template |
-
-### Templates
-
-| Tool | Description |
-|------|-------------|
 | `list_templates` | List all notes in the Templates folder |
-| `create_from_template` | Create a new note from a template with placeholder substitution |
+| `create_from_template` | Instantiate a template with `{{title}}`, `{{date}}`, and custom `{{key}}` substitutions |
 
-`create_from_template` substitutes `{{title}}`, `{{date}}`, and any custom `{{key}}` placeholders passed via `extra_vars`.
-
-### Search
-
+### Search & Query
 | Tool | Description |
 |------|-------------|
-| `search_notes` | Full-text search across note contents and filenames |
-| `search_by_tag` | Find notes by tag(s), with `any` or `all` match modes |
-| `search_by_frontmatter` | Find notes matching specific frontmatter key-value pairs |
-
-### AI-Powered Knowledge Features
-
-| Tool | Description |
-|------|-------------|
-| `summarize_note` | Extract a structural outline: heading hierarchy, first sentence per section, word count, and reading time |
-| `suggest_links` | Rank existing vault notes by content/title overlap and return candidates not already linked |
-| `generate_moc` | Generate a Map of Contents for a folder — titles, tags, and first paragraph of each note |
-| `find_duplicates` | Identify pairs of notes with similar content using Jaccard similarity (configurable threshold) |
-
-### Vault Intelligence
-
-| Tool | Description |
-|------|-------------|
-| `get_graph_stats` | Vault-wide stats: note count, total links, avg connections, top notes by in/out degree |
-| `get_hub_notes` | Return the most-linked-to notes (the knowledge graph's pillars), ranked by backlink count |
-| `trace_path` | Find the shortest wikilink path between any two notes (like six degrees of separation) |
-| `get_recently_modified` | List notes modified within the last N days, most recent first |
-
-### Writing & Workflow
-
-| Tool | Description |
-|------|-------------|
-| `extract_tasks` | Scan the vault (or a single note) for `- [ ]` checkboxes, with open/done filtering |
-| `complete_task` | Check off a specific open task by matching its exact text |
-| `merge_notes` | Combine multiple notes into one, optionally stripping frontmatter from subsequent sources |
-| `split_note` | Split a note at a given heading level — each section becomes its own file |
-
-### Dataview-Style Queries
-
-| Tool | Description |
-|------|-------------|
-| `query_notes` | Filter notes by frontmatter using `eq`, `neq`, `contains`, `gt`, `lt`, `gte`, `lte`, and `exists` operators, with sort and limit |
+| `search_notes` | Full-text search across contents and filenames |
+| `search_by_tag` | Find notes by tag(s) with `any` or `all` match modes |
+| `search_by_frontmatter` | Find notes by frontmatter key-value pairs |
+| `query_notes` | Filter by frontmatter with `eq`, `neq`, `contains`, `gt`, `lt`, `gte`, `lte`, `exists` — plus sort and limit |
 | `get_timeline` | List notes sorted chronologically by any date frontmatter field |
 
-### Vault Health
-
+### Writing & Workflow
 | Tool | Description |
 |------|-------------|
-| `find_broken_links` | List all `[[wikilinks]]` pointing to notes that don't exist |
-| `find_empty_notes` | Find notes with no body content (empty or frontmatter-only) |
-| `vault_report` | Full health report: broken links, orphans, empty notes, top tags, and folder sizes |
+| `extract_tasks` | Scan for `- [ ]` checkboxes across the vault or a single note |
+| `complete_task` | Check off an open task by matching its exact text |
+| `merge_notes` | Combine multiple notes into one, with optional frontmatter stripping |
+| `split_note` | Split a note at a heading level — each section becomes its own file |
 
-## Setup
+### Vault Intelligence
+| Tool | Description |
+|------|-------------|
+| `get_graph_stats` | Total notes, links, avg connections, top notes by in/out degree |
+| `get_hub_notes` | The most-linked-to notes — your knowledge graph's pillars |
+| `trace_path` | Find the shortest wikilink path between any two notes |
+| `get_recently_modified` | Notes modified in the last N days, most recent first |
+
+### Vault Health
+| Tool | Description |
+|------|-------------|
+| `find_broken_links` | Every `[[wikilink]]` pointing to a note that doesn't exist |
+| `find_empty_notes` | Notes with no body content (empty or frontmatter-only) |
+| `vault_report` | Full health report: broken links, orphans, empty notes, top tags, folder sizes |
+
+### AI-Powered Knowledge Features
+| Tool | Description |
+|------|-------------|
+| `summarize_note` | Structural outline: headings, first sentence per section, word count, reading time |
+| `suggest_links` | Rank unlinked notes by content/title overlap — find missing connections |
+| `generate_moc` | Auto-generate a Map of Contents for any folder |
+| `find_duplicates` | Identify similar note pairs using Jaccard similarity |
+| `find_knowledge_gaps` | Surface bold terms, capitalized phrases, and wikilinks that don't have a corresponding note |
+| `extract_concepts` | Categorize content into wikilinks, bold terms, code terms, and proper nouns |
+| `generate_summary_note` | Synthesize multiple notes into a single structured overview |
+| `suggest_note_structure` | Analyze a note and recommend improvements to its heading hierarchy, frontmatter, and organization |
+| `cluster_notes` | Group notes into thematic clusters using shared vocabulary |
+| `find_related_notes` | Find the most thematically similar notes to a given note |
+| `compare_notes` | Side-by-side comparison: shared concepts, unique content, tag and link overlap |
+| `get_note_evolution` | Track word count, headings, and links across git history |
+| `extract_quotes` | Collect all blockquotes from the vault, optionally filtered by tag |
+| `find_unsourced_claims` | Flag assertive sentences with no wikilink, URL, or citation |
+| `generate_flashcards` | Convert a note into Anki-compatible Q&A pairs — detects Q:/A: patterns, bold definitions, and heading + summary pairs |
+| `extract_definitions` | Find "X is a..." and `**Term** — definition` patterns and compile a glossary |
+| `get_review_queue` | Notes with an active status flag that haven't been touched in N+ days |
+| `generate_weekly_review` | Modified notes, open/done tasks, active tags, and most active folders for the past week |
+| `score_note_quality` | Rate every note on a 9-point rubric: frontmatter, tags, links, body length, heading structure, and more |
+| `suggest_tags` | Infer likely tags for a note by comparing it to how similar notes across the vault are tagged |
+
+---
+
+## 🚀 Setup
 
 **Prerequisites:** Node.js 18+
 
@@ -118,13 +130,14 @@ cd dtg-obsidian-mcp
 npm install
 ```
 
-Copy the example MCP config and fill in your paths:
+Copy the example config and fill in your paths:
 
 ```bash
 cp .mcp.json.example .mcp.json
 ```
 
-```json
+```jsonc
+// .mcp.json
 {
   "mcpServers": {
     "obsidian-vault": {
@@ -140,26 +153,53 @@ cp .mcp.json.example .mcp.json
 }
 ```
 
-## Environment Variables
+Place `.mcp.json` in your project root or `~/.claude/` and Claude Code will connect automatically.
+
+---
+
+## ⚙️ Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VAULT_PATH` | `/path/to/your/obsidian/vault` | Absolute path to your Obsidian vault |
+| `VAULT_PATH` | *(required)* | Absolute path to your Obsidian vault |
 | `DAILY_NOTES_FOLDER` | `Daily Notes` | Vault-relative folder for daily notes |
 | `TEMPLATES_FOLDER` | `Templates` | Vault-relative folder for templates |
 
-## Usage with Claude Code
+---
 
-Place `.mcp.json` in your project root (or `~/.claude/`) and Claude Code will automatically connect to the server. You can then ask Claude to read, write, search, and organize your vault directly in conversation.
+## 💬 Example Prompts
 
-**Example prompts:**
-- *"Summarize all notes tagged #project and save the summary to their frontmatter"*
-- *"Create a daily note for today using my meeting template"*
-- *"Find all notes that link to 'Zettelkasten' and list their backlinks"*
-- *"Set the status field to 'done' in Projects/Q1 Review.md"*
-- *"Run a vault health report and fix any broken links"*
-- *"Find duplicate notes in my Research folder"*
-- *"What's the shortest path between my 'Systems Thinking' note and 'Habit Tracking'?"*
-- *"Show me all open tasks across the vault"*
-- *"Query all notes where status is 'active' and tag includes 'project', sorted by date"*
-- *"Split my 'Big Ideas' note into separate files, one per heading"*
+Once connected, you can talk to your vault naturally:
+
+```
+"Run a full vault health report and fix any broken links"
+"Find all notes I haven't touched in 2 weeks that are still marked active"
+"What's the shortest path between my 'Systems Thinking' note and 'Habit Tracking'?"
+"Generate flashcards from my Calculus notes and save them to Study/Calculus Flashcards.md"
+"Cluster all notes in my Research folder by theme"
+"Find knowledge gaps in my 'Machine Learning' note"
+"Score all my notes for quality and show me the ones below 50%"
+"Generate a weekly review for the past 7 days"
+"Extract every definition from my vault and compile a glossary"
+"Suggest tags for my untitled draft note"
+"Compare my 'Atomic Habits' and 'Deep Work' notes — what do they share?"
+"Find any unsourced claims in my essay drafts"
+```
+
+---
+
+## 📁 Project Structure
+
+```
+dtg-obsidian-mcp/
+├── index.js          # All 56 MCP tools
+├── package.json
+├── .mcp.json.example # Config template
+└── .nvmrc
+```
+
+---
+
+## 📄 License
+
+ISC
