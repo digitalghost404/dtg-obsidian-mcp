@@ -1041,7 +1041,12 @@ server.tool(
           default:    return false;
         }
       });
-      if (passes) results.push({ rel: toRelative(file), data });
+      if (passes) {
+        const normalized = Object.fromEntries(
+          Object.entries(data).map(([k, v]) => [k, v instanceof Date ? formatDate(v) : v])
+        );
+        results.push({ rel: toRelative(file), data: normalized });
+      }
     }
 
     if (sort_by) {
