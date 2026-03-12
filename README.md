@@ -1,6 +1,8 @@
 # dtg-obsidian-mcp
 
-An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that gives Claude direct read/write access to an [Obsidian](https://obsidian.md) vault. Supports note management, frontmatter editing, wikilink graph traversal, daily notes, templates, and more.
+An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that gives Claude direct read/write access to an [Obsidian](https://obsidian.md) vault. Supports note management, frontmatter editing, wikilink graph traversal, AI-powered knowledge features, daily notes, templates, dataview-style queries, vault health reporting, and more.
+
+**40 tools across 8 categories.**
 
 ## Tools
 
@@ -14,7 +16,7 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that g
 | `delete_note` | Delete a note by path |
 | `rename_note` | Rename or move a note to a new path |
 | `append_to_note` | Append content to a note without overwriting it |
-| `patch_note` | Find and replace text within a note |
+| `patch_note` | Find and replace text within a note (first occurrence or all) |
 
 ### Frontmatter / Metadata
 
@@ -64,6 +66,48 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that g
 | `search_by_tag` | Find notes by tag(s), with `any` or `all` match modes |
 | `search_by_frontmatter` | Find notes matching specific frontmatter key-value pairs |
 
+### AI-Powered Knowledge Features
+
+| Tool | Description |
+|------|-------------|
+| `summarize_note` | Extract a structural outline: heading hierarchy, first sentence per section, word count, and reading time |
+| `suggest_links` | Rank existing vault notes by content/title overlap and return candidates not already linked |
+| `generate_moc` | Generate a Map of Contents for a folder — titles, tags, and first paragraph of each note |
+| `find_duplicates` | Identify pairs of notes with similar content using Jaccard similarity (configurable threshold) |
+
+### Vault Intelligence
+
+| Tool | Description |
+|------|-------------|
+| `get_graph_stats` | Vault-wide stats: note count, total links, avg connections, top notes by in/out degree |
+| `get_hub_notes` | Return the most-linked-to notes (the knowledge graph's pillars), ranked by backlink count |
+| `trace_path` | Find the shortest wikilink path between any two notes (like six degrees of separation) |
+| `get_recently_modified` | List notes modified within the last N days, most recent first |
+
+### Writing & Workflow
+
+| Tool | Description |
+|------|-------------|
+| `extract_tasks` | Scan the vault (or a single note) for `- [ ]` checkboxes, with open/done filtering |
+| `complete_task` | Check off a specific open task by matching its exact text |
+| `merge_notes` | Combine multiple notes into one, optionally stripping frontmatter from subsequent sources |
+| `split_note` | Split a note at a given heading level — each section becomes its own file |
+
+### Dataview-Style Queries
+
+| Tool | Description |
+|------|-------------|
+| `query_notes` | Filter notes by frontmatter using `eq`, `neq`, `contains`, `gt`, `lt`, `gte`, `lte`, and `exists` operators, with sort and limit |
+| `get_timeline` | List notes sorted chronologically by any date frontmatter field |
+
+### Vault Health
+
+| Tool | Description |
+|------|-------------|
+| `find_broken_links` | List all `[[wikilinks]]` pointing to notes that don't exist |
+| `find_empty_notes` | Find notes with no body content (empty or frontmatter-only) |
+| `vault_report` | Full health report: broken links, orphans, empty notes, top tags, and folder sizes |
+
 ## Setup
 
 **Prerequisites:** Node.js 18+
@@ -109,7 +153,13 @@ cp .mcp.json.example .mcp.json
 Place `.mcp.json` in your project root (or `~/.claude/`) and Claude Code will automatically connect to the server. You can then ask Claude to read, write, search, and organize your vault directly in conversation.
 
 **Example prompts:**
-- *"Summarize all notes tagged #project in my vault"*
+- *"Summarize all notes tagged #project and save the summary to their frontmatter"*
 - *"Create a daily note for today using my meeting template"*
 - *"Find all notes that link to 'Zettelkasten' and list their backlinks"*
 - *"Set the status field to 'done' in Projects/Q1 Review.md"*
+- *"Run a vault health report and fix any broken links"*
+- *"Find duplicate notes in my Research folder"*
+- *"What's the shortest path between my 'Systems Thinking' note and 'Habit Tracking'?"*
+- *"Show me all open tasks across the vault"*
+- *"Query all notes where status is 'active' and tag includes 'project', sorted by date"*
+- *"Split my 'Big Ideas' note into separate files, one per heading"*
