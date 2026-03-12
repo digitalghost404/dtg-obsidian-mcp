@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "obsidian-vault": {
+      "command": "node",
+      "args": ["/path/to/obsidian-mcp/index.js"],
+      "env": {
+        "VAULT_PATH": "/path/to/your/obsidian/vault",
+        "DAILY_NOTES_FOLDER": "Daily Notes",
+        "TEMPLATES_FOLDER": "Templates"
+      }
+    }
+  }
+}
