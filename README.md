@@ -1,22 +1,26 @@
-# 🧠 dtg-obsidian-mcp
+# Synapse
 
-> Give Claude direct, intelligent access to your Obsidian vault.
+> The connective layer for your Obsidian vault.
 
-**dtg-obsidian-mcp** is a [Model Context Protocol](https://modelcontextprotocol.io) server that connects Claude to your Obsidian vault — not just as a file reader, but as a true knowledge assistant. Ask Claude to find gaps in your knowledge graph, generate flashcards, cluster your notes by theme, trace paths between ideas, audit your vault's health, and much more.
+Your notes are full of ideas — but ideas in isolation are just text. **Synapse** is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that gives Claude a nervous system for your Obsidian vault. It doesn't just read and write files. It traces paths between ideas, surfaces missing connections, clusters notes by theme, flags weak points in your thinking, and helps you see your knowledge graph the way your brain was always meant to.
 
-**56 tools across 9 categories.**
+**56 tools. 9 categories. One vault that finally thinks back.**
 
 ---
 
-## ✨ What makes this different
+## ⚡ What Synapse does differently
 
-Most Obsidian integrations stop at read/write. This server goes further:
+Every PKM tool lets you store notes. Synapse helps you *use* them.
 
-- 🔍 **Graph intelligence** — trace the shortest wikilink path between any two notes, find your most-linked hub notes, detect orphans and broken links
-- 🤖 **AI-ready knowledge tools** — extract concepts, suggest missing links, generate MOCs, cluster notes by theme, compare ideas side-by-side
-- ✍️ **Writing assistance** — generate Anki flashcards, compile glossaries, flag unsourced claims, extract all blockquotes
-- 📊 **Dataview-style queries** — filter notes by any frontmatter field with rich operators, get chronological timelines
-- 🏥 **Vault health** — score every note on a quality rubric, find duplicates, get a full weekly review report
+| Without Synapse | With Synapse |
+|-----------------|--------------|
+| Manually hunting for related notes | `find_related_notes` ranks your vault by thematic similarity |
+| Not knowing what's missing | `find_knowledge_gaps` surfaces concepts with no note yet |
+| Links you forgot to make | `suggest_links` finds unlinked connections using content overlap |
+| Notes that slowly go stale | `get_review_queue` surfaces overdue active notes automatically |
+| No idea how healthy your vault is | `vault_report` gives a full diagnostic in one shot |
+| Studying from raw notes | `generate_flashcards` converts any note to Anki-ready Q&A pairs |
+| Wondering how two ideas connect | `trace_path` finds the shortest wikilink path between any two notes |
 
 ---
 
@@ -83,7 +87,7 @@ Most Obsidian integrations stop at read/write. This server goes further:
 | Tool | Description |
 |------|-------------|
 | `get_graph_stats` | Total notes, links, avg connections, top notes by in/out degree |
-| `get_hub_notes` | The most-linked-to notes — your knowledge graph's pillars |
+| `get_hub_notes` | The most-linked-to notes — the high-degree neurons of your graph |
 | `trace_path` | Find the shortest wikilink path between any two notes |
 | `get_recently_modified` | Notes modified in the last N days, most recent first |
 
@@ -92,31 +96,33 @@ Most Obsidian integrations stop at read/write. This server goes further:
 |------|-------------|
 | `find_broken_links` | Every `[[wikilink]]` pointing to a note that doesn't exist |
 | `find_empty_notes` | Notes with no body content (empty or frontmatter-only) |
-| `vault_report` | Full health report: broken links, orphans, empty notes, top tags, folder sizes |
+| `vault_report` | Full diagnostic: broken links, orphans, empty notes, top tags, folder sizes |
 
-### AI-Powered Knowledge Features
+### Connective Intelligence
+*The tools that make Synapse more than a file manager.*
+
 | Tool | Description |
 |------|-------------|
 | `summarize_note` | Structural outline: headings, first sentence per section, word count, reading time |
-| `suggest_links` | Rank unlinked notes by content/title overlap — find missing connections |
+| `suggest_links` | Rank unlinked notes by content and title overlap — fire new connections |
 | `generate_moc` | Auto-generate a Map of Contents for any folder |
 | `find_duplicates` | Identify similar note pairs using Jaccard similarity |
-| `find_knowledge_gaps` | Surface bold terms, capitalized phrases, and wikilinks that don't have a corresponding note |
-| `extract_concepts` | Categorize content into wikilinks, bold terms, code terms, and proper nouns |
+| `find_knowledge_gaps` | Surface bold terms, capitalized phrases, and wikilinks that have no corresponding note |
+| `extract_concepts` | Categorize a note's content into wikilinks, bold terms, code terms, and proper nouns |
 | `generate_summary_note` | Synthesize multiple notes into a single structured overview |
-| `suggest_note_structure` | Analyze a note and recommend improvements to its heading hierarchy, frontmatter, and organization |
-| `cluster_notes` | Group notes into thematic clusters using shared vocabulary |
+| `suggest_note_structure` | Analyze a note and recommend improvements to heading hierarchy, frontmatter, and organization |
+| `cluster_notes` | Group notes into thematic clusters by shared vocabulary — see your vault's regions |
 | `find_related_notes` | Find the most thematically similar notes to a given note |
-| `compare_notes` | Side-by-side comparison: shared concepts, unique content, tag and link overlap |
+| `compare_notes` | Side-by-side: shared concepts, unique content, tag and link overlap |
 | `get_note_evolution` | Track word count, headings, and links across git history |
 | `extract_quotes` | Collect all blockquotes from the vault, optionally filtered by tag |
 | `find_unsourced_claims` | Flag assertive sentences with no wikilink, URL, or citation |
-| `generate_flashcards` | Convert a note into Anki-compatible Q&A pairs — detects Q:/A: patterns, bold definitions, and heading + summary pairs |
-| `extract_definitions` | Find "X is a..." and `**Term** — definition` patterns and compile a glossary |
-| `get_review_queue` | Notes with an active status flag that haven't been touched in N+ days |
+| `generate_flashcards` | Convert a note into Anki-compatible Q&A pairs — detects Q:/A: blocks, bold definitions, heading + summary pairs |
+| `extract_definitions` | Compile a glossary from "X is a..." and `**Term** — definition` patterns |
+| `get_review_queue` | Notes flagged as active that haven't been touched in N+ days |
 | `generate_weekly_review` | Modified notes, open/done tasks, active tags, and most active folders for the past week |
-| `score_note_quality` | Rate every note on a 9-point rubric: frontmatter, tags, links, body length, heading structure, and more |
-| `suggest_tags` | Infer likely tags for a note by comparing it to how similar notes across the vault are tagged |
+| `score_note_quality` | Rate notes on a 9-point rubric: frontmatter, tags, links, body length, heading structure, and more |
+| `suggest_tags` | Infer likely tags by comparing a note to how similar notes across the vault are tagged |
 
 ---
 
@@ -137,7 +143,6 @@ cp .mcp.json.example .mcp.json
 ```
 
 ```jsonc
-// .mcp.json
 {
   "mcpServers": {
     "obsidian-vault": {
@@ -167,35 +172,32 @@ Place `.mcp.json` in your project root or `~/.claude/` and Claude Code will conn
 
 ---
 
-## 💬 Example Prompts
-
-Once connected, you can talk to your vault naturally:
+## 💬 Synapse in action
 
 ```
 "Run a full vault health report and fix any broken links"
+
 "Find all notes I haven't touched in 2 weeks that are still marked active"
+
 "What's the shortest path between my 'Systems Thinking' note and 'Habit Tracking'?"
+
 "Generate flashcards from my Calculus notes and save them to Study/Calculus Flashcards.md"
-"Cluster all notes in my Research folder by theme"
-"Find knowledge gaps in my 'Machine Learning' note"
+
+"Cluster all notes in my Research folder by theme and show me what emerges"
+
+"Find knowledge gaps in my 'Machine Learning' note — what concepts am I missing?"
+
 "Score all my notes for quality and show me the ones below 50%"
-"Generate a weekly review for the past 7 days"
+
 "Extract every definition from my vault and compile a glossary"
-"Suggest tags for my untitled draft note"
-"Compare my 'Atomic Habits' and 'Deep Work' notes — what do they share?"
-"Find any unsourced claims in my essay drafts"
-```
 
----
+"Suggest tags for this draft note based on how the rest of my vault is tagged"
 
-## 📁 Project Structure
+"Compare my 'Atomic Habits' and 'Deep Work' notes — where do these ideas overlap?"
 
-```
-dtg-obsidian-mcp/
-├── index.js          # All 56 MCP tools
-├── package.json
-├── .mcp.json.example # Config template
-└── .nvmrc
+"Flag any unsourced claims in my essay drafts"
+
+"Generate a weekly review — what did I work on, what's still open?"
 ```
 
 ---
