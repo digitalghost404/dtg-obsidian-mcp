@@ -204,4 +204,6 @@ Place `.mcp.json` in your project root or `~/.claude/` and Claude Code will conn
 
 ## 📄 License
 
-ISC
+[MIT](./LICENSE) with [Commons Clause](https://commonsclause.com/)
+
+Free to use, modify, and distribute for personal and noncommercial purposes. You may not sell the software or offer it as a paid product or service.
