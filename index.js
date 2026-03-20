@@ -4,7 +4,11 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import fs from "fs/promises";
 import path from "path";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import matter from "gray-matter";
+
+const execFileAsync = promisify(execFile);
 
 // ─── Vault path ───────────────────────────────────────────────────────────────
 if (!process.env.VAULT_PATH) {
@@ -212,7 +216,7 @@ server.tool(
   "List all notes in the Obsidian vault. Optionally filter by folder.",
   { folder: z.string().optional().describe("Subfolder to list (e.g. 'Projects'). Omit for all notes.") },
   async ({ folder }) => {
-    const searchRoot = folder ? await notePath(folder) : VAULT_PATH;
+    const searchRoot = folder ? await notePath(folder) : VAULT_ROOT;
     const files = await collectMarkdownFiles(searchRoot);
     return { content: [{ type: "text", text: files.map(toRelative).join("\n") || "No notes found." }] };
   }
@@ -254,7 +258,7 @@ server.tool(
 
     const stem = path.basename(noteName, ".md").toLowerCase();
     const normalizedTarget = path.normalize(noteName);
-    const files = await collectMarkdownFiles(VAULT_PATH);
+    const files = await collectMarkdownFiles(VAULT_ROOT);
     const danglingIn = [];
     for (const file of files) {
       if (path.normalize(toRelative(file)) === normalizedTarget) continue;
@@ -298,12 +302,12 @@ server.tool(
     const newStem = path.basename(to, ".md");
     let updatedCount = 0;
     if (oldStem !== newStem) {
-      const files = await collectMarkdownFiles(VAULT_PATH);
-      const linkPattern = new RegExp(`\\[\\[${oldStem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\|[^\\]]*)?\\]\\]`, "gi");
+      const files = await collectMarkdownFiles(VAULT_ROOT);
+      const escapedStem = oldStem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       for (const file of files) {
         const content = await fs.readFile(file, "utf-8");
+        const linkPattern = new RegExp(`\\[\\[${escapedStem}(\\|[^\\]]*)?\\]\\]`, "gi");
         if (linkPattern.test(content)) {
-          linkPattern.lastIndex = 0;
           const updated = content.replace(linkPattern, `[[${newStem}$1]]`);
           await fs.writeFile(file, updated, "utf-8");
           updatedCount++;
@@ -393,7 +397,7 @@ server.tool(
   "Aggregate all tags used across the vault with their usage counts.",
   {},
   async () => {
-    const files = await collectMarkdownFiles(VAULT_PATH);
+    const files = await collectMarkdownFiles(VAULT_ROOT);
     const tagCounts = {};
     for (const file of files) {
       for (const tag of extractTags(matter(await fs.readFile(file, "utf-8")))) {
@@ -429,7 +433,7 @@ server.tool(
   { path: z.string().describe("Vault-relative path of the target note.") },
   async ({ path: noteName }) => {
     const stem = path.basename(noteName, ".md").toLowerCase();
-    const files = await collectMarkdownFiles(VAULT_PATH);
+    const files = await collectMarkdownFiles(VAULT_ROOT);
     const backlinks = [];
     for (const file of files) {
       const links = parseWikilinks(await fs.readFile(file, "utf-8")).map((l) => l.toLowerCase());
@@ -444,7 +448,7 @@ server.tool(
   "List notes that have no incoming backlinks and no outgoing wikilinks.",
   {},
   async () => {
-    const files = await collectMarkdownFiles(VAULT_PATH);
+    const files = await collectMarkdownFiles(VAULT_ROOT);
     const outgoingByRel = {};
     for (const file of files) {
       const rel = toRelative(file);
@@ -468,7 +472,7 @@ server.tool(
   "List all subdirectories (folders) in the vault.",
   {},
   async () => {
-    const folders = await collectFolders(VAULT_PATH);
+    const folders = await collectFolders(VAULT_ROOT);
     return { content: [{ type: "text", text: folders.length ? folders.join("\n") : "No folders found." }] };
   }
 );
@@ -506,8 +510,16 @@ server.tool(
       }
     }
     await fs.access(fullPath);
-    if (force) await fs.rm(fullPath, { recursive: true, force: true });
-    else await fs.rmdir(fullPath);
+    if (force) {
+      await fs.rm(fullPath, { recursive: true, force: true });
+    } else {
+      try {
+        await fs.rmdir(fullPath);
+      } catch (e) {
+        if (e.code === "ENOTEMPTY") throw new Error(`Folder is not empty: ${folderName}. Use force: true to delete recursively, or dry_run: true to preview contents.`);
+        throw e;
+      }
+    }
     return { content: [{ type: "text", text: `Folder deleted: ${folderName}` }] };
   }
 );
@@ -614,7 +626,7 @@ server.tool(
   "Search note contents and filenames for a query string (case-insensitive).",
   { query: z.string().min(1).describe("Text to search for.") },
   async ({ query }) => {
-    const files = await collectMarkdownFiles(VAULT_PATH);
+    const files = await collectMarkdownFiles(VAULT_ROOT);
     const lowerQuery = query.toLowerCase();
     const results = [];
     for (const file of files) {
@@ -641,7 +653,7 @@ server.tool(
     match: z.enum(["any", "all"]).optional().describe("'any': at least one tag matches. 'all': all tags must match. Defaults to 'any'."),
   },
   async ({ tags, match = "any" }) => {
-    const files = await collectMarkdownFiles(VAULT_PATH);
+    const files = await collectMarkdownFiles(VAULT_ROOT);
     const lowerTags = tags.map((t) => t.toLowerCase());
     const results = [];
     for (const file of files) {
@@ -659,7 +671,7 @@ server.tool(
   "Find notes whose frontmatter matches the given key-value criteria (case-insensitive string comparison).",
   { criteria: z.record(z.string(), z.unknown()).describe("Key-value pairs that must match the note's frontmatter.") },
   async ({ criteria }) => {
-    const files = await collectMarkdownFiles(VAULT_PATH);
+    const files = await collectMarkdownFiles(VAULT_ROOT);
     const results = [];
     for (const file of files) {
       const { data } = matter(await fs.readFile(file, "utf-8"));
@@ -742,7 +754,7 @@ server.tool(
     const sourceLinks = new Set(parseWikilinks(sourceRaw).map((l) => l.toLowerCase()));
     const sourceStem = path.basename(noteName, ".md").toLowerCase();
 
-    const files = await collectMarkdownFiles(VAULT_PATH);
+    const files = await collectMarkdownFiles(VAULT_ROOT);
     const candidates = [];
 
     for (const file of files) {
@@ -821,7 +833,7 @@ server.tool(
     folder: z.string().optional().describe("Limit search to a specific folder."),
   },
   async ({ threshold = 0.5, folder }) => {
-    const searchRoot = folder ? await notePath(folder) : VAULT_PATH;
+    const searchRoot = folder ? await notePath(folder) : VAULT_ROOT;
     const files = await collectMarkdownFiles(searchRoot);
 
     // Pre-tokenize all files
@@ -867,7 +879,7 @@ server.tool(
   "Return vault-wide graph statistics: note count, link counts, most-connected notes, and isolated clusters.",
   {},
   async () => {
-    const files = await collectMarkdownFiles(VAULT_PATH);
+    const files = await collectMarkdownFiles(VAULT_ROOT);
     const graph = await buildLinkGraph(files);
 
     const inDegree = {};
@@ -913,7 +925,7 @@ server.tool(
   "Return the most-linked-to notes in the vault (the knowledge graph's pillars), ranked by backlink count.",
   { limit: z.number().int().min(1).optional().describe("Number of hub notes to return. Defaults to 10.") },
   async ({ limit = 10 }) => {
-    const files = await collectMarkdownFiles(VAULT_PATH);
+    const files = await collectMarkdownFiles(VAULT_ROOT);
     const inDegree = {};
     for (const file of files) {
       const content = await fs.readFile(file, "utf-8");
@@ -940,7 +952,7 @@ server.tool(
     to: z.string().describe("Vault-relative path or note stem to find."),
   },
   async ({ from, to }) => {
-    const files = await collectMarkdownFiles(VAULT_PATH);
+    const files = await collectMarkdownFiles(VAULT_ROOT);
     const graph = await buildLinkGraph(files);
     const startStem = path.basename(from, ".md").toLowerCase();
     const endStem = path.basename(to, ".md").toLowerCase();
@@ -967,7 +979,7 @@ server.tool(
   "List notes modified within the last N days, most recent first.",
   { days: z.number().int().min(1).optional().describe("Lookback window in days. Defaults to 7.") },
   async ({ days = 7 }) => {
-    const files = await collectMarkdownFiles(VAULT_PATH);
+    const files = await collectMarkdownFiles(VAULT_ROOT);
     const cutoff = Date.now() - days * 86_400_000;
     const entries = [];
 
@@ -1001,7 +1013,7 @@ server.tool(
     status: z.enum(["all", "open", "done"]).optional().describe("Filter by task status. Defaults to 'all'."),
   },
   async ({ path: noteName, status = "all" }) => {
-    const files = noteName ? [await notePath(noteName)] : await collectMarkdownFiles(VAULT_PATH);
+    const files = noteName ? [await notePath(noteName)] : await collectMarkdownFiles(VAULT_ROOT);
     const results = [];
 
     for (const file of files) {
@@ -1053,7 +1065,7 @@ server.tool(
   "merge_notes",
   "Merge multiple notes into a single destination note.",
   {
-    sources: z.array(z.string()).describe("Ordered list of vault-relative source note paths."),
+    sources: z.array(z.string()).min(1).describe("Ordered list of vault-relative source note paths."),
     destination: z.string().describe("Vault-relative path for the merged note."),
     strip_frontmatter: z.boolean().optional().describe("If true, omit frontmatter from all but the first note. Defaults to true."),
     separator: z.string().optional().describe("Markdown separator inserted between merged notes. Defaults to '\\n---\\n'."),
@@ -1175,7 +1187,7 @@ server.tool(
     limit: z.number().int().min(1).optional().describe("Maximum number of results to return."),
   },
   async ({ where, sort_by, sort_order = "asc", limit }) => {
-    const files = await collectMarkdownFiles(VAULT_PATH);
+    const files = await collectMarkdownFiles(VAULT_ROOT);
     const results = [];
 
     for (const file of files) {
@@ -1243,7 +1255,7 @@ server.tool(
     folder: z.string().optional().describe("Limit to a specific folder."),
   },
   async ({ date_field = "date", order = "desc", limit, folder }) => {
-    const searchRoot = folder ? await notePath(folder) : VAULT_PATH;
+    const searchRoot = folder ? await notePath(folder) : VAULT_ROOT;
     const files = await collectMarkdownFiles(searchRoot);
     const entries = [];
 
@@ -1282,7 +1294,7 @@ server.tool(
   "List all [[wikilinks]] that point to notes that don't exist in the vault.",
   {},
   async () => {
-    const files = await collectMarkdownFiles(VAULT_PATH);
+    const files = await collectMarkdownFiles(VAULT_ROOT);
     const existingStems = new Set(files.map((f) => path.basename(f, ".md").toLowerCase()));
     const broken = [];
 
@@ -1311,7 +1323,7 @@ server.tool(
   "Find notes that have no meaningful content (empty body or only frontmatter).",
   {},
   async () => {
-    const files = await collectMarkdownFiles(VAULT_PATH);
+    const files = await collectMarkdownFiles(VAULT_ROOT);
     const empty = [];
 
     for (const file of files) {
@@ -1331,7 +1343,7 @@ server.tool(
   "Generate a comprehensive vault health report: broken links, orphans, empty notes, tag stats, and folder sizes.",
   {},
   async () => {
-    const files = await collectMarkdownFiles(VAULT_PATH);
+    const files = await collectMarkdownFiles(VAULT_ROOT);
     const existingStems = new Set(files.map((f) => path.basename(f, ".md").toLowerCase()));
 
     const broken = [];
@@ -1418,7 +1430,7 @@ server.tool(
     path: z.string().describe("Vault-relative path to the note to analyse."),
   },
   async ({ path: noteName }) => {
-    const files = await collectMarkdownFiles(VAULT_PATH);
+    const files = await collectMarkdownFiles(VAULT_ROOT);
     const existingStems = new Set(files.map((f) => path.basename(f, ".md").toLowerCase()));
     const raw = await fs.readFile(await notePath(noteName), "utf-8");
     const { content } = matter(raw);
@@ -1492,7 +1504,7 @@ server.tool(
   "generate_summary_note",
   "Synthesise multiple notes into a single structured overview note, preserving key themes, tags, and links from each source.",
   {
-    sources: z.array(z.string()).describe("Vault-relative paths of the notes to synthesise."),
+    sources: z.array(z.string()).min(1).describe("Vault-relative paths of the notes to synthesise."),
     destination: z.string().optional().describe("Vault-relative path to save the summary note. Omit to return without saving."),
     title: z.string().optional().describe("Title for the summary note. Defaults to 'Summary'."),
   },
@@ -1621,7 +1633,7 @@ server.tool(
     min_cluster_size: z.number().int().min(1).optional().describe("Only return clusters with at least this many notes. Defaults to 2."),
   },
   async ({ threshold = 0.15, folder, min_cluster_size = 2 }) => {
-    const searchRoot = folder ? await notePath(folder) : VAULT_PATH;
+    const searchRoot = folder ? await notePath(folder) : VAULT_ROOT;
     const files = await collectMarkdownFiles(searchRoot);
 
     const tokenSets = [];
@@ -1669,7 +1681,7 @@ server.tool(
     limit: z.number().int().min(1).optional().describe("Max results to return. Defaults to 10."),
   },
   async ({ path: noteName, limit = 10 }) => {
-    const files = await collectMarkdownFiles(VAULT_PATH);
+    const files = await collectMarkdownFiles(VAULT_ROOT);
     const sourceStem = path.basename(noteName, ".md").toLowerCase();
     const sourceTokens = new Set(tokenize(matter(await fs.readFile(await notePath(noteName), "utf-8")).content));
 
@@ -1752,9 +1764,6 @@ server.tool(
   },
   async ({ path: noteName, limit = 10 }) => {
     const fullPath = await notePath(noteName);
-    const { execFile } = await import("child_process");
-    const { promisify } = await import("util");
-    const execFileAsync = promisify(execFile);
 
     // Check if vault is a git repo
     let isGit = false;
@@ -1821,7 +1830,7 @@ server.tool(
     tag: z.string().optional().describe("Only return quotes from notes with this tag."),
   },
   async ({ path: noteName, tag }) => {
-    const files = noteName ? [await notePath(noteName)] : await collectMarkdownFiles(VAULT_PATH);
+    const files = noteName ? [await notePath(noteName)] : await collectMarkdownFiles(VAULT_ROOT);
     const results = [];
 
     for (const file of files) {
@@ -1863,7 +1872,7 @@ server.tool(
     const ASSERTION_WORDS = /\b(is|are|was|were|shows|show|proves|prove|demonstrates|always|never|must|causes|cause|leads to|results in|increases|decreases|improves|reduces)\b/i;
     const HAS_SOURCE = /\[\[|https?:\/\/|\[@|\(\d{4}\)|ibid|et al/i;
 
-    const files = noteName ? [await notePath(noteName)] : await collectMarkdownFiles(VAULT_PATH);
+    const files = noteName ? [await notePath(noteName)] : await collectMarkdownFiles(VAULT_ROOT);
     const results = [];
 
     for (const file of files) {
@@ -1990,7 +1999,7 @@ server.tool(
       /^`(.{2,50})`\s*[—:-]\s*(.{10,200})/,
     ];
 
-    const files = noteName ? [await notePath(noteName)] : await collectMarkdownFiles(VAULT_PATH);
+    const files = noteName ? [await notePath(noteName)] : await collectMarkdownFiles(VAULT_ROOT);
     const definitions = [];
 
     for (const file of files) {
@@ -2041,7 +2050,7 @@ server.tool(
     active_values: z.array(z.string()).optional().describe("Values that indicate a note is active. Defaults to ['active', 'in-progress', 'wip']."),
   },
   async ({ days = 14, status_field = "status", active_values = ["active", "in-progress", "wip"] }) => {
-    const files = await collectMarkdownFiles(VAULT_PATH);
+    const files = await collectMarkdownFiles(VAULT_ROOT);
     const cutoff = Date.now() - days * 86_400_000;
     const queue = [];
 
@@ -2080,7 +2089,7 @@ server.tool(
     days: z.number().int().min(1).optional().describe("Lookback window in days. Defaults to 7."),
   },
   async ({ days = 7 }) => {
-    const files = await collectMarkdownFiles(VAULT_PATH);
+    const files = await collectMarkdownFiles(VAULT_ROOT);
     const cutoff = Date.now() - days * 86_400_000;
 
     const modified = [];
@@ -2160,7 +2169,7 @@ server.tool(
       };
     }
 
-    const files = await collectMarkdownFiles(VAULT_PATH);
+    const files = await collectMarkdownFiles(VAULT_ROOT);
     const scores = [];
     for (const file of files) scores.push(await scoreFile(file));
     scores.sort((a, b) => a.score - b.score);
@@ -2185,7 +2194,7 @@ server.tool(
     limit: z.number().int().min(1).optional().describe("Max tag suggestions to return. Defaults to 10."),
   },
   async ({ path: noteName, limit = 10 }) => {
-    const files = await collectMarkdownFiles(VAULT_PATH);
+    const files = await collectMarkdownFiles(VAULT_ROOT);
     const sourceStem = path.basename(noteName, ".md").toLowerCase();
     const sourceRaw = await fs.readFile(await notePath(noteName), "utf-8");
     const sourceParsed = matter(sourceRaw);

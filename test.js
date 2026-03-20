@@ -298,21 +298,21 @@ await test("get_timeline",          () => client.tool("get_timeline", { date_fie
 console.log(B("\nWriting & Workflow"));
 await test("extract_tasks",  () => client.tool("extract_tasks",  { path: `${T}/Note A.md` }), { contains: "Write hypothesis" });
 await test("complete_task",  () => client.tool("complete_task",  { path: `${T}/Note A.md`, task_text: "Review literature" }), { contains: "Task completed" });
-await test("merge_notes",    () => client.tool("merge_notes",    { sources: [`${T}/Note A.md`, `${T}/Note B.md`], destination: `${T}/Merged.md` }));
+await test("merge_notes",    () => client.tool("merge_notes",    { sources: [`${T}/Note A.md`, `${T}/Note B.md`], destination: `${T}/Merged.md` }), { contains: "Merged" });
 await test("split_note",     () => client.tool("split_note",     { path: `${T}/Note C.md`, heading_level: 2, destination_folder: `${T}/Split` }));
 
 // ── Vault Intelligence ───────────────────────────────────────────────────────
 console.log(B("\nVault Intelligence"));
-await test("get_graph_stats",      () => client.tool("get_graph_stats"));
-await test("get_hub_notes",        () => client.tool("get_hub_notes", { limit: 5 }));
-await test("trace_path",           () => client.tool("trace_path", { from: `${T}/Note B.md`, to: `${T}/Note C.md` }));
+await test("get_graph_stats",      () => client.tool("get_graph_stats"), { contains: "Total notes" });
+await test("get_hub_notes",        () => client.tool("get_hub_notes", { limit: 5 }), { contains: "backlinks" });
+await test("trace_path",           () => client.tool("trace_path", { from: `${T}/Note B.md`, to: `${T}/Note C.md` }), { contains: "hop" });
 await test("get_recently_modified",() => client.tool("get_recently_modified", { days: 1 }), { contains: "Note A.md" });
 
 // ── Vault Health ─────────────────────────────────────────────────────────────
 console.log(B("\nVault Health"));
 await test("find_broken_links", () => client.tool("find_broken_links"));
 await test("find_empty_notes",  () => client.tool("find_empty_notes"));
-await test("vault_report",      () => client.tool("vault_report"));
+await test("vault_report",      () => client.tool("vault_report"), { contains: "Vault Health Report" });
 
 // ── Connective Intelligence ───────────────────────────────────────────────────
 console.log(B("\nConnective Intelligence"));
@@ -329,12 +329,12 @@ await test("generate_summary_note", () => client.tool("generate_summary_note", {
 await test("suggest_note_structure",() => client.tool("suggest_note_structure",{ path: `${T}/Note D.md` }));
 await test("cluster_notes",         () => client.tool("cluster_notes",         { threshold: 0.05, folder: T }), { contains: "Cluster" });
 await test("find_related_notes",    () => client.tool("find_related_notes",    { path: `${T}/Note A.md` }));
-await test("compare_notes",         () => client.tool("compare_notes",         { path_a: `${T}/Note A.md`, path_b: `${T}/Note B.md` }));
+await test("compare_notes",         () => client.tool("compare_notes",         { path_a: `${T}/Note A.md`, path_b: `${T}/Note B.md` }), { contains: "Comparison" });
 await test("get_note_evolution",    () => client.tool("get_note_evolution",    { path: `${T}/Note A.md` }), { contains: "Note A.md" });
 await test("extract_quotes",        () => client.tool("extract_quotes",        { path: `${T}/Note A.md` }), { contains: "Francis Bacon" });
 await test("find_unsourced_claims", () => client.tool("find_unsourced_claims", { path: `${T}/Note B.md` }), { contains: "scientific method" });
-await test("generate_flashcards",   () => client.tool("generate_flashcards",   { path: `${T}/Note C.md` }));
-await test("extract_definitions",   () => client.tool("extract_definitions",   { path: `${T}/Note B.md` }));
+await test("generate_flashcards",   () => client.tool("generate_flashcards",   { path: `${T}/Note C.md` }), { contains: "Flashcards" });
+await test("extract_definitions",   () => client.tool("extract_definitions",   { path: `${T}/Note B.md` }), { contains: "Control group" });
 await test("get_review_queue",      () => client.tool("get_review_queue",      { days: 1 }), { contains: "No notes overdue" });
 await test("generate_weekly_review",() => client.tool("generate_weekly_review",{ days: 7 }), { contains: "Weekly Review" });
 await test("score_note_quality",    () => client.tool("score_note_quality",    { path: `${T}/Note A.md` }), { contains: "Quality Score" });
@@ -356,6 +356,12 @@ await test("create_from_template over existing", () => client.tool("create_from_
   destination: `${T}/Note D.md`,
   title: "Overwrite",
 }), { expectError: true });
+// Create a folder with content for non-empty rmdir test
+await client.tool("create_folder", { path: `${T}/NonEmpty` });
+await client.tool("write_note", { path: `${T}/NonEmpty/child.md`, content: "child" });
+await test("delete non-empty folder (no force)", () => client.tool("delete_folder", { path: `${T}/NonEmpty` }), { expectError: true });
+// Clean up the folder
+await client.tool("delete_folder", { path: `${T}/NonEmpty`, force: true });
 
 // ─── Cleanup & Report ────────────────────────────────────────────────────────
 await client.stop();
