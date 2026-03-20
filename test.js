@@ -306,7 +306,7 @@ console.log(B("\nVault Intelligence"));
 await test("get_graph_stats",      () => client.tool("get_graph_stats"));
 await test("get_hub_notes",        () => client.tool("get_hub_notes", { limit: 5 }));
 await test("trace_path",           () => client.tool("trace_path", { from: `${T}/Note B.md`, to: `${T}/Note C.md` }));
-await test("get_recently_modified",() => client.tool("get_recently_modified", { days: 1 }));
+await test("get_recently_modified",() => client.tool("get_recently_modified", { days: 1 }), { contains: "Note A.md" });
 
 // ── Vault Health ─────────────────────────────────────────────────────────────
 console.log(B("\nVault Health"));
@@ -318,26 +318,26 @@ await test("vault_report",      () => client.tool("vault_report"));
 console.log(B("\nConnective Intelligence"));
 await test("summarize_note",        () => client.tool("summarize_note",       { path: `${T}/Note A.md` }));
 await test("suggest_links",         () => client.tool("suggest_links",        { path: `${T}/Note D.md` }));
-await test("generate_moc",          () => client.tool("generate_moc",         { folder: T }));
+await test("generate_moc",          () => client.tool("generate_moc",         { folder: T }), { contains: "Map of Contents" });
 await test("find_duplicates",       () => client.tool("find_duplicates",       { threshold: 0.1, folder: T }));
 await test("find_knowledge_gaps",   () => client.tool("find_knowledge_gaps",   { path: `${T}/Note A.md` }));
 await test("extract_concepts",      () => client.tool("extract_concepts",      { path: `${T}/Note A.md` }));
 await test("generate_summary_note", () => client.tool("generate_summary_note", {
   sources: [`${T}/Note A.md`, `${T}/Note B.md`],
   title: "Science Overview",
-}));
+}), { contains: "Science Overview" });
 await test("suggest_note_structure",() => client.tool("suggest_note_structure",{ path: `${T}/Note D.md` }));
-await test("cluster_notes",         () => client.tool("cluster_notes",         { threshold: 0.05, folder: T }));
+await test("cluster_notes",         () => client.tool("cluster_notes",         { threshold: 0.05, folder: T }), { contains: "Cluster" });
 await test("find_related_notes",    () => client.tool("find_related_notes",    { path: `${T}/Note A.md` }));
 await test("compare_notes",         () => client.tool("compare_notes",         { path_a: `${T}/Note A.md`, path_b: `${T}/Note B.md` }));
 await test("get_note_evolution",    () => client.tool("get_note_evolution",    { path: `${T}/Note A.md` }), { contains: "Note A.md" });
 await test("extract_quotes",        () => client.tool("extract_quotes",        { path: `${T}/Note A.md` }), { contains: "Francis Bacon" });
-await test("find_unsourced_claims", () => client.tool("find_unsourced_claims", { path: `${T}/Note B.md` }));
+await test("find_unsourced_claims", () => client.tool("find_unsourced_claims", { path: `${T}/Note B.md` }), { contains: "scientific method" });
 await test("generate_flashcards",   () => client.tool("generate_flashcards",   { path: `${T}/Note C.md` }));
 await test("extract_definitions",   () => client.tool("extract_definitions",   { path: `${T}/Note B.md` }));
 await test("get_review_queue",      () => client.tool("get_review_queue",      { days: 1 }), { contains: "No notes overdue" });
-await test("generate_weekly_review",() => client.tool("generate_weekly_review",{ days: 7 }));
-await test("score_note_quality",    () => client.tool("score_note_quality",    { path: `${T}/Note A.md` }));
+await test("generate_weekly_review",() => client.tool("generate_weekly_review",{ days: 7 }), { contains: "Weekly Review" });
+await test("score_note_quality",    () => client.tool("score_note_quality",    { path: `${T}/Note A.md` }), { contains: "Quality Score" });
 await test("suggest_tags",          () => client.tool("suggest_tags",          { path: `${T}/Note D.md` }));
 
 // ── Error / Edge Case Tests ──────────────────────────────────────────────────

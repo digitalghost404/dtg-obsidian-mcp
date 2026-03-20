@@ -82,7 +82,7 @@ async function collectFolders(dir, baseDir = dir) {
 
 /** Convert an absolute vault file path to a vault-relative path. */
 function toRelative(absolutePath) {
-  return path.relative(VAULT_PATH, absolutePath);
+  return path.relative(VAULT_ROOT, absolutePath);
 }
 
 /** Extract [[wikilinks]] from content. */
@@ -178,6 +178,24 @@ function bfsPath(graph, startStem, endStem) {
   return null;
 }
 
+// ─── Quality rubric (used by score_note_quality) ────────────────────────────
+const QUALITY_RUBRIC = [
+  { label: "Has frontmatter",      points: 15, check: (d) => Object.keys(d.data).length > 0 },
+  { label: "Has tags",             points: 15, check: (d) => !!d.data.tags },
+  { label: "Has date field",       points: 5,  check: (d) => !!d.data.date },
+  { label: "Has title heading",    points: 10, check: (d) => /^# .+/m.test(d.content) },
+  { label: "Has body content",     points: 20, check: (d) => d.content.trim().length > 0 },
+  { label: "Body ≥ 100 words",     points: 15, check: (d) => tokenize(d.content).length >= 100 },
+  { label: "Has outgoing links",   points: 10, check: (d, raw) => parseWikilinks(raw).length > 0 },
+  { label: "Has summary field",    points: 5,  check: (d) => !!d.data.summary },
+  { label: "Has no broken H-levels", points: 5, check: (d) => {
+    const levels = d.content.split("\n").filter((l) => /^#{1,6}\s/.test(l)).map((h) => h.match(/^(#+)/)[1].length);
+    for (let i = 1; i < levels.length; i++) if (levels[i] - levels[i-1] > 1) return false;
+    return true;
+  }},
+];
+const QUALITY_MAX = QUALITY_RUBRIC.reduce((s, r) => s + r.points, 0);
+
 // ─── Server setup ─────────────────────────────────────────────────────────────
 
 const server = new McpServer({
@@ -263,6 +281,7 @@ server.tool(
   },
   async ({ from, to }) => {
     const fromPath = await notePath(from);
+    await fs.access(fromPath);
     const toPath = await notePath(to);
     // Check destination doesn't already exist
     try {
@@ -479,8 +498,11 @@ server.tool(
         const files = await collectMarkdownFiles(fullPath);
         const folders = await collectFolders(fullPath);
         return { content: [{ type: "text", text: `Dry run — would delete:\n  ${files.length} note(s)\n  ${folders.length} subfolder(s)\n\nNotes:\n${files.map((f) => `  - ${toRelative(f)}`).join("\n") || "  (none)"}` }] };
-      } catch {
-        return { content: [{ type: "text", text: `Folder not found: ${folderName}` }] };
+      } catch (e) {
+        if (e.code === "ENOENT" || e.message.startsWith("Folder not found")) {
+          return { content: [{ type: "text", text: `Folder not found: ${folderName}` }] };
+        }
+        throw e;
       }
     }
     await fs.access(fullPath);
@@ -590,7 +612,7 @@ server.tool(
 server.tool(
   "search_notes",
   "Search note contents and filenames for a query string (case-insensitive).",
-  { query: z.string().describe("Text to search for.") },
+  { query: z.string().min(1).describe("Text to search for.") },
   async ({ query }) => {
     const files = await collectMarkdownFiles(VAULT_PATH);
     const lowerQuery = query.toLowerCase();
@@ -780,6 +802,8 @@ server.tool(
 
     if (destination) {
       const destPath = await notePath(destination);
+      try { await fs.access(destPath); throw new Error(`Destination already exists: ${destination}. Use write_note to overwrite.`); }
+      catch (e) { if (e.message.startsWith("Destination already exists")) throw e; }
       await fs.mkdir(path.dirname(destPath), { recursive: true });
       await fs.writeFile(destPath, moc, "utf-8");
       return { content: [{ type: "text", text: `MOC written to: ${destination}` }] };
@@ -1515,6 +1539,8 @@ server.tool(
 
     if (destination) {
       const destPath = await notePath(destination);
+      try { await fs.access(destPath); throw new Error(`Destination already exists: ${destination}. Use write_note to overwrite.`); }
+      catch (e) { if (e.message.startsWith("Destination already exists")) throw e; }
       await fs.mkdir(path.dirname(destPath), { recursive: true });
       await fs.writeFile(destPath, note, "utf-8");
       return { content: [{ type: "text", text: `Summary note written to: ${destination}` }] };
@@ -1603,9 +1629,9 @@ server.tool(
       files.map(async (f) => new Set(tokenize(matter(await fs.readFile(f, "utf-8")).content)))
     );
 
-    // Union-Find
+    // Union-Find (iterative to avoid stack overflow on large vaults)
     const parent = files.map((_, i) => i);
-    const find = (i) => { if (parent[i] !== i) parent[i] = find(parent[i]); return parent[i]; };
+    const find = (i) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
     const union = (i, j) => { parent[find(i)] = find(j); };
 
     for (let i = 0; i < files.length; i++) {
@@ -1769,8 +1795,12 @@ server.tool(
     rows.push("|------|-------|----------|-------|--------|");
 
     for (const line of commits) {
-      const [hash, date, ...msgParts] = line.split(" ");
-      const msg = msgParts.join(" ").slice(0, 40);
+      const sp1 = line.indexOf(" ");
+      const sp2 = sp1 > 0 ? line.indexOf(" ", sp1 + 1) : -1;
+      if (sp1 < 0 || sp2 < 0) continue;
+      const hash = line.slice(0, sp1);
+      const date = line.slice(sp1 + 1, sp2);
+      const msg = line.slice(sp2 + 1).slice(0, 40);
       if (!/^[0-9a-f]{7,40}$/i.test(hash)) continue;
       try {
         const { stdout: blob } = await execFileAsync("git", ["-C", VAULT_PATH, "show", `${hash}:${gitPath}`]);
@@ -1841,10 +1871,13 @@ server.tool(
       const { content } = matter(raw);
       const flagged = [];
 
+      let inCodeBlock = false;
       for (const [i, line] of content.split("\n").entries()) {
-        // Skip headings, blockquotes, list markers, code blocks, blank lines
+        if (line.trim().startsWith("```")) { inCodeBlock = !inCodeBlock; continue; }
+        if (inCodeBlock) continue;
+        // Skip headings, blockquotes, list markers, blank lines
         const trimmed = line.trim();
-        if (!trimmed || /^[#>`\-*|]/.test(trimmed) || /^```/.test(trimmed)) continue;
+        if (!trimmed || /^[#>`\-*|]/.test(trimmed)) continue;
 
         const sentences = trimmed.split(/(?<=[.!?])\s+/);
         for (const sentence of sentences) {
@@ -1932,6 +1965,8 @@ server.tool(
 
     if (destination) {
       const destPath = await notePath(destination);
+      try { await fs.access(destPath); throw new Error(`Destination already exists: ${destination}. Use write_note to overwrite.`); }
+      catch (e) { if (e.message.startsWith("Destination already exists")) throw e; }
       await fs.mkdir(path.dirname(destPath), { recursive: true });
       await fs.writeFile(destPath, output, "utf-8");
       return { content: [{ type: "text", text: `Flashcards saved to: ${destination}` }] };
@@ -1986,6 +2021,8 @@ server.tool(
 
     if (destination) {
       const destPath = await notePath(destination);
+      try { await fs.access(destPath); throw new Error(`Destination already exists: ${destination}. Use write_note to overwrite.`); }
+      catch (e) { if (e.message.startsWith("Destination already exists")) throw e; }
       await fs.mkdir(path.dirname(destPath), { recursive: true });
       await fs.writeFile(destPath, output, "utf-8");
       return { content: [{ type: "text", text: `Glossary saved to: ${destination}` }] };
@@ -2100,34 +2137,17 @@ server.tool(
     min_score: z.number().min(0).max(100).optional().describe("When scoring all notes, only return notes at or below this score (0–100). Defaults to 100 (return all)."),
   },
   async ({ path: noteName, min_score = 100 }) => {
-    const RUBRIC = [
-      { label: "Has frontmatter",      points: 15, check: (d) => Object.keys(d.data).length > 0 },
-      { label: "Has tags",             points: 15, check: (d) => !!d.data.tags },
-      { label: "Has date field",       points: 5,  check: (d) => !!d.data.date },
-      { label: "Has title heading",    points: 10, check: (d) => /^# .+/m.test(d.content) },
-      { label: "Has body content",     points: 20, check: (d) => d.content.trim().length > 0 },
-      { label: "Body ≥ 100 words",     points: 15, check: (d) => tokenize(d.content).length >= 100 },
-      { label: "Has outgoing links",   points: 10, check: (d, raw) => parseWikilinks(raw).length > 0 },
-      { label: "Has summary field",    points: 5,  check: (d) => !!d.data.summary },
-      { label: "Has no broken H-levels", points: 5, check: (d) => {
-        const levels = d.content.split("\n").filter((l) => /^#{1,6}\s/.test(l)).map((h) => h.match(/^(#+)/)[1].length);
-        for (let i = 1; i < levels.length; i++) if (levels[i] - levels[i-1] > 1) return false;
-        return true;
-      }},
-    ];
-    const MAX = RUBRIC.reduce((s, r) => s + r.points, 0);
-
     const scoreFile = async (file) => {
       const raw = await fs.readFile(file, "utf-8");
       const parsed = matter(raw);
       let score = 0;
       const breakdown = [];
-      for (const item of RUBRIC) {
+      for (const item of QUALITY_RUBRIC) {
         const pass = item.check(parsed, raw);
         if (pass) score += item.points;
         breakdown.push(`  [${pass ? "✓" : "✗"}] ${item.label} (${item.points}pts)`);
       }
-      return { rel: toRelative(file), score, max: MAX, breakdown };
+      return { rel: toRelative(file), score, max: QUALITY_MAX, breakdown };
     };
 
     if (noteName) {
