@@ -131,8 +131,8 @@ Every PKM tool lets you store notes. Synapse helps you *use* them.
 **Prerequisites:** Node.js 18+
 
 ```bash
-git clone https://github.com/digitalghost404/dtg-obsidian-mcp.git
-cd dtg-obsidian-mcp
+git clone https://github.com/digitalghost404/obsidian-mcp.git
+cd obsidian-mcp
 npm install
 ```
 
@@ -147,7 +147,7 @@ cp .mcp.json.example .mcp.json
   "mcpServers": {
     "obsidian-vault": {
       "command": "node",
-      "args": ["/path/to/dtg-obsidian-mcp/index.js"],
+      "args": ["/path/to/obsidian-mcp/index.js"],
       "env": {
         "VAULT_PATH": "/path/to/your/obsidian/vault",
         "DAILY_NOTES_FOLDER": "Daily Notes",

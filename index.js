@@ -1,29 +1,53 @@
+#!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { z } from "zod/v3";
+import { z } from "zod";
 import fs from "fs/promises";
 import path from "path";
 import matter from "gray-matter";
 
 // ─── Vault path ───────────────────────────────────────────────────────────────
-const VAULT_PATH = process.env.VAULT_PATH ?? "/home/xcoleman/obsidian-vault/dtg404-vault";
+if (!process.env.VAULT_PATH) {
+  throw new Error("VAULT_PATH environment variable is required. Set it to the absolute path of your Obsidian vault.");
+}
+const VAULT_PATH = process.env.VAULT_PATH;
 const DAILY_NOTES_FOLDER = process.env.DAILY_NOTES_FOLDER ?? "Daily Notes";
 const TEMPLATES_FOLDER = process.env.TEMPLATES_FOLDER ?? "Templates";
 
+// Resolve the vault root once at startup (avoids repeated realpath syscalls)
+const VAULT_ROOT = path.resolve(VAULT_PATH);
+let REAL_VAULT_ROOT;
+try { REAL_VAULT_ROOT = await fs.realpath(VAULT_ROOT); } catch { REAL_VAULT_ROOT = VAULT_ROOT; }
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Resolve a note path safely within the vault (prevents path traversal). */
-function notePath(relativePath) {
-  const resolved = path.resolve(VAULT_PATH, relativePath);
-  if (!resolved.startsWith(path.resolve(VAULT_PATH))) {
+/** Resolve a note path safely within the vault (prevents path traversal and symlink escape). */
+async function notePath(relativePath) {
+  const resolved = path.resolve(VAULT_ROOT, relativePath);
+  if (resolved !== VAULT_ROOT && !resolved.startsWith(VAULT_ROOT + path.sep)) {
     throw new Error("Path is outside the vault");
+  }
+  // For existing paths, resolve symlinks and re-check
+  try {
+    const real = await fs.realpath(resolved);
+    if (real !== REAL_VAULT_ROOT && !real.startsWith(REAL_VAULT_ROOT + path.sep)) {
+      throw new Error("Path is outside the vault (symlink escape)");
+    }
+  } catch (e) {
+    if (e.code !== "ENOENT") throw e;
   }
   return resolved;
 }
 
 /** Recursively collect all .md files under a directory. */
 async function collectMarkdownFiles(dir) {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
+  let entries;
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch (e) {
+    if (e.code === "ENOENT") throw new Error(`Folder not found: ${dir}`);
+    throw e;
+  }
   const files = [];
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
@@ -38,7 +62,13 @@ async function collectMarkdownFiles(dir) {
 
 /** Recursively collect all subdirectories under a directory. */
 async function collectFolders(dir, baseDir = dir) {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
+  let entries;
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch (e) {
+    if (e.code === "ENOENT") throw new Error(`Folder not found: ${dir}`);
+    throw e;
+  }
   const folders = [];
   for (const entry of entries) {
     if (entry.isDirectory() && !entry.name.startsWith(".")) {
@@ -61,9 +91,17 @@ function parseWikilinks(content) {
   return [...new Set(matches.map((m) => m[1].trim()))];
 }
 
-/** Format today or a given date as YYYY-MM-DD. */
-function formatDate(date = new Date()) {
-  return date.toISOString().split("T")[0];
+/** Format today or a given date as YYYY-MM-DD (local time for new dates, UTC for Date objects from frontmatter). */
+function formatDate(date) {
+  if (!date) {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+  if (date instanceof Date) {
+    // Dates from gray-matter are UTC midnight — use UTC methods to avoid timezone shift
+    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+  }
+  return String(date).slice(0, 10);
 }
 
 /** Parse tags from frontmatter and inline #tags in content. */
@@ -79,7 +117,7 @@ function extractTags(parsedMatter) {
 
 /** Sanitize a string for use as a filename stem. */
 function slugify(str) {
-  return str.replace(/[/\\?%*:|"<>]/g, "-").trim();
+  return str.replace(/[/\\?%*:|"<>]/g, "-").trim() || "untitled";
 }
 
 // ─── NLP helpers ─────────────────────────────────────────────────────────────
@@ -100,7 +138,7 @@ function tokenize(text) {
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, " ")
     .split(/\s+/)
-    .filter((w) => w.length > 2 && !STOP_WORDS.has(w));
+    .filter((w) => w.length >= 2 && !STOP_WORDS.has(w));
 }
 
 function jaccardSimilarity(setA, setB) {
@@ -156,7 +194,7 @@ server.tool(
   "List all notes in the Obsidian vault. Optionally filter by folder.",
   { folder: z.string().optional().describe("Subfolder to list (e.g. 'Projects'). Omit for all notes.") },
   async ({ folder }) => {
-    const searchRoot = folder ? notePath(folder) : VAULT_PATH;
+    const searchRoot = folder ? await notePath(folder) : VAULT_PATH;
     const files = await collectMarkdownFiles(searchRoot);
     return { content: [{ type: "text", text: files.map(toRelative).join("\n") || "No notes found." }] };
   }
@@ -167,7 +205,7 @@ server.tool(
   "Read the full content of a note by its vault-relative path.",
   { path: z.string().describe("Vault-relative path to the note.") },
   async ({ path: noteName }) => {
-    const content = await fs.readFile(notePath(noteName), "utf-8");
+    const content = await fs.readFile(await notePath(noteName), "utf-8");
     return { content: [{ type: "text", text: content }] };
   }
 );
@@ -180,7 +218,7 @@ server.tool(
     content: z.string().describe("Full markdown content to write."),
   },
   async ({ path: noteName, content }) => {
-    const fullPath = notePath(noteName);
+    const fullPath = await notePath(noteName);
     await fs.mkdir(path.dirname(fullPath), { recursive: true });
     await fs.writeFile(fullPath, content, "utf-8");
     return { content: [{ type: "text", text: `Note written: ${noteName}` }] };
@@ -189,26 +227,73 @@ server.tool(
 
 server.tool(
   "delete_note",
-  "Delete a note by its vault-relative path. This is irreversible.",
+  "Delete a note by its vault-relative path. This is irreversible. Reports any notes that still link to it (dangling backlinks).",
   { path: z.string().describe("Vault-relative path to the note to delete.") },
   async ({ path: noteName }) => {
-    await fs.unlink(notePath(noteName));
-    return { content: [{ type: "text", text: `Deleted: ${noteName}` }] };
+    const targetPath = await notePath(noteName);
+    // Validate target exists before scanning vault for backlinks
+    await fs.access(targetPath);
+
+    const stem = path.basename(noteName, ".md").toLowerCase();
+    const normalizedTarget = path.normalize(noteName);
+    const files = await collectMarkdownFiles(VAULT_PATH);
+    const danglingIn = [];
+    for (const file of files) {
+      if (path.normalize(toRelative(file)) === normalizedTarget) continue;
+      const links = parseWikilinks(await fs.readFile(file, "utf-8")).map((l) => l.toLowerCase());
+      if (links.includes(stem)) danglingIn.push(toRelative(file));
+    }
+
+    await fs.unlink(targetPath);
+
+    let msg = `Deleted: ${noteName}`;
+    if (danglingIn.length) {
+      msg += `\n\n⚠ Warning: ${danglingIn.length} note(s) still link to this note (now broken):\n${danglingIn.map((n) => `  - ${n}`).join("\n")}`;
+    }
+    return { content: [{ type: "text", text: msg }] };
   }
 );
 
 server.tool(
   "rename_note",
-  "Rename or move a note to a new vault-relative path.",
+  "Rename or move a note to a new vault-relative path. Automatically updates [[wikilinks]] in other notes that reference the old name.",
   {
     from: z.string().describe("Current vault-relative path."),
     to: z.string().describe("New vault-relative path."),
   },
   async ({ from, to }) => {
-    const toPath = notePath(to);
+    const fromPath = await notePath(from);
+    const toPath = await notePath(to);
+    // Check destination doesn't already exist
+    try {
+      await fs.access(toPath);
+      throw new Error(`Destination already exists: ${to}. Delete it first or choose a different name.`);
+    } catch (e) {
+      if (e.message.startsWith("Destination already exists")) throw e;
+    }
     await fs.mkdir(path.dirname(toPath), { recursive: true });
-    await fs.rename(notePath(from), toPath);
-    return { content: [{ type: "text", text: `Moved: ${from} → ${to}` }] };
+    await fs.rename(fromPath, toPath);
+
+    // Update backlinks in other notes
+    const oldStem = path.basename(from, ".md");
+    const newStem = path.basename(to, ".md");
+    let updatedCount = 0;
+    if (oldStem !== newStem) {
+      const files = await collectMarkdownFiles(VAULT_PATH);
+      const linkPattern = new RegExp(`\\[\\[${oldStem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\|[^\\]]*)?\\]\\]`, "gi");
+      for (const file of files) {
+        const content = await fs.readFile(file, "utf-8");
+        if (linkPattern.test(content)) {
+          linkPattern.lastIndex = 0;
+          const updated = content.replace(linkPattern, `[[${newStem}$1]]`);
+          await fs.writeFile(file, updated, "utf-8");
+          updatedCount++;
+        }
+      }
+    }
+
+    const backlinkMsg = updatedCount ? ` Updated backlinks in ${updatedCount} note(s).` : "";
+    return { content: [{ type: "text", text: `Moved: ${from} → ${to}${backlinkMsg}` }] };
   }
 );
 
@@ -220,7 +305,7 @@ server.tool(
     content: z.string().describe("Markdown content to append."),
   },
   async ({ path: noteName, content }) => {
-    const fullPath = notePath(noteName);
+    const fullPath = await notePath(noteName);
     const existing = await fs.readFile(fullPath, "utf-8");
     const separator = existing.endsWith("\n") ? "" : "\n";
     await fs.writeFile(fullPath, existing + separator + content, "utf-8");
@@ -238,12 +323,14 @@ server.tool(
     replace_all: z.boolean().optional().describe("Replace all occurrences. Defaults to false."),
   },
   async ({ path: noteName, search, replace, replace_all = false }) => {
-    const fullPath = notePath(noteName);
+    const fullPath = await notePath(noteName);
     const content = await fs.readFile(fullPath, "utf-8");
+    if (!search) throw new Error("Search string cannot be empty");
     if (!content.includes(search)) throw new Error(`Search string not found in ${noteName}`);
-    const updated = replace_all ? content.split(search).join(replace) : content.replace(search, replace);
+    const parts = content.split(search);
+    const count = replace_all ? parts.length - 1 : 1;
+    const updated = replace_all ? parts.join(replace) : content.replace(search, replace);
     await fs.writeFile(fullPath, updated, "utf-8");
-    const count = replace_all ? content.split(search).length - 1 : 1;
     return { content: [{ type: "text", text: `Patched ${count} occurrence(s) in: ${noteName}` }] };
   }
 );
@@ -257,7 +344,7 @@ server.tool(
   "Parse and return the YAML frontmatter of a note as structured JSON.",
   { path: z.string().describe("Vault-relative path to the note.") },
   async ({ path: noteName }) => {
-    const raw = await fs.readFile(notePath(noteName), "utf-8");
+    const raw = await fs.readFile(await notePath(noteName), "utf-8");
     const data = matter(raw).data;
     // Normalize Date objects to YYYY-MM-DD strings
     const normalized = Object.fromEntries(
@@ -272,10 +359,10 @@ server.tool(
   "Update specific frontmatter fields on a note. Existing fields not mentioned are preserved.",
   {
     path: z.string().describe("Vault-relative path to the note."),
-    fields: z.record(z.unknown()).describe("Key-value pairs to set in the frontmatter."),
+    fields: z.record(z.string(), z.unknown()).describe("Key-value pairs to set in the frontmatter."),
   },
   async ({ path: noteName, fields }) => {
-    const fullPath = notePath(noteName);
+    const fullPath = await notePath(noteName);
     const parsed = matter(await fs.readFile(fullPath, "utf-8"));
     await fs.writeFile(fullPath, matter.stringify(parsed.content, { ...parsed.data, ...fields }), "utf-8");
     return { content: [{ type: "text", text: `Frontmatter updated: ${noteName}` }] };
@@ -311,7 +398,7 @@ server.tool(
   "Return all [[wikilinks]] found in a note.",
   { path: z.string().describe("Vault-relative path to the note.") },
   async ({ path: noteName }) => {
-    const content = await fs.readFile(notePath(noteName), "utf-8");
+    const content = await fs.readFile(await notePath(noteName), "utf-8");
     const links = parseWikilinks(content);
     return { content: [{ type: "text", text: links.length ? links.join("\n") : "No outgoing links." }] };
   }
@@ -372,20 +459,31 @@ server.tool(
   "Create a new folder (and any missing parent folders) in the vault.",
   { path: z.string().describe("Vault-relative folder path to create.") },
   async ({ path: folderName }) => {
-    await fs.mkdir(notePath(folderName), { recursive: true });
+    await fs.mkdir(await notePath(folderName), { recursive: true });
     return { content: [{ type: "text", text: `Folder created: ${folderName}` }] };
   }
 );
 
 server.tool(
   "delete_folder",
-  "Delete a folder. Fails if non-empty unless force is true.",
+  "Delete a folder. Fails if non-empty unless force is true. Use dry_run to preview what would be deleted.",
   {
     path: z.string().describe("Vault-relative path of the folder to delete."),
     force: z.boolean().optional().describe("Delete folder and all its contents. Defaults to false."),
+    dry_run: z.boolean().optional().describe("If true, list contents without deleting. Defaults to false."),
   },
-  async ({ path: folderName, force = false }) => {
-    const fullPath = notePath(folderName);
+  async ({ path: folderName, force = false, dry_run = false }) => {
+    const fullPath = await notePath(folderName);
+    if (dry_run) {
+      try {
+        const files = await collectMarkdownFiles(fullPath);
+        const folders = await collectFolders(fullPath);
+        return { content: [{ type: "text", text: `Dry run — would delete:\n  ${files.length} note(s)\n  ${folders.length} subfolder(s)\n\nNotes:\n${files.map((f) => `  - ${toRelative(f)}`).join("\n") || "  (none)"}` }] };
+      } catch {
+        return { content: [{ type: "text", text: `Folder not found: ${folderName}` }] };
+      }
+    }
+    await fs.access(fullPath);
     if (force) await fs.rm(fullPath, { recursive: true, force: true });
     else await fs.rmdir(fullPath);
     return { content: [{ type: "text", text: `Folder deleted: ${folderName}` }] };
@@ -401,9 +499,10 @@ server.tool(
   "Read the daily note for today or a specific date.",
   { date: z.string().optional().describe("Date in YYYY-MM-DD format. Defaults to today.") },
   async ({ date }) => {
+    if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("date must be in YYYY-MM-DD format");
     const dateStr = date ?? formatDate();
     const relPath = path.join(DAILY_NOTES_FOLDER, `${dateStr}.md`);
-    const content = await fs.readFile(notePath(relPath), "utf-8");
+    const content = await fs.readFile(await notePath(relPath), "utf-8");
     return { content: [{ type: "text", text: content }] };
   }
 );
@@ -416,16 +515,17 @@ server.tool(
     template: z.string().optional().describe("Vault-relative path to a template note."),
   },
   async ({ date, template }) => {
+    if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error("date must be in YYYY-MM-DD format");
     const dateStr = date ?? formatDate();
     const relPath = path.join(DAILY_NOTES_FOLDER, `${dateStr}.md`);
-    const fullPath = notePath(relPath);
+    const fullPath = await notePath(relPath);
     try {
       await fs.access(fullPath);
       return { content: [{ type: "text", text: `Daily note already exists: ${relPath}` }] };
     } catch { /* doesn't exist — proceed */ }
     let content = `# ${dateStr}\n`;
     if (template) {
-      const tmplRaw = await fs.readFile(notePath(template), "utf-8");
+      const tmplRaw = await fs.readFile(await notePath(template), "utf-8");
       content = tmplRaw.replaceAll("{{date}}", dateStr).replaceAll("{{title}}", dateStr);
     }
     await fs.mkdir(path.dirname(fullPath), { recursive: true });
@@ -443,9 +543,13 @@ server.tool(
   "List all notes in the Templates folder.",
   {},
   async () => {
-    const tmplRoot = notePath(TEMPLATES_FOLDER);
-    const files = await collectMarkdownFiles(tmplRoot);
-    return { content: [{ type: "text", text: files.map(toRelative).join("\n") || "No templates found." }] };
+    try {
+      const tmplRoot = await notePath(TEMPLATES_FOLDER);
+      const files = await collectMarkdownFiles(tmplRoot);
+      return { content: [{ type: "text", text: files.map(toRelative).join("\n") || "No templates found." }] };
+    } catch {
+      return { content: [{ type: "text", text: "No templates found. Templates folder does not exist." }] };
+    }
   }
 );
 
@@ -456,11 +560,18 @@ server.tool(
     template: z.string().describe("Vault-relative path to the template note."),
     destination: z.string().describe("Vault-relative path for the new note."),
     title: z.string().optional().describe("Value for {{title}}. Defaults to the destination filename stem."),
-    extra_vars: z.record(z.string()).optional().describe("Additional {{key}} substitutions."),
+    extra_vars: z.record(z.string(), z.string()).optional().describe("Additional {{key}} substitutions."),
   },
   async ({ template, destination, title, extra_vars = {} }) => {
-    const destPath = notePath(destination);
-    const raw = await fs.readFile(notePath(template), "utf-8");
+    const destPath = await notePath(destination);
+    try {
+      await fs.access(destPath);
+      throw new Error(`Destination already exists: ${destination}. Use write_note to overwrite.`);
+    } catch (e) {
+      if (e.message.startsWith("Destination already exists")) throw e;
+      /* doesn't exist — proceed */
+    }
+    const raw = await fs.readFile(await notePath(template), "utf-8");
     const titleValue = title ?? path.basename(destination, ".md");
     let content = raw.replaceAll("{{title}}", titleValue).replaceAll("{{date}}", formatDate());
     for (const [key, value] of Object.entries(extra_vars)) {
@@ -524,7 +635,7 @@ server.tool(
 server.tool(
   "search_by_frontmatter",
   "Find notes whose frontmatter matches the given key-value criteria (case-insensitive string comparison).",
-  { criteria: z.record(z.unknown()).describe("Key-value pairs that must match the note's frontmatter.") },
+  { criteria: z.record(z.string(), z.unknown()).describe("Key-value pairs that must match the note's frontmatter.") },
   async ({ criteria }) => {
     const files = await collectMarkdownFiles(VAULT_PATH);
     const results = [];
@@ -549,7 +660,7 @@ server.tool(
   "Extract a structural outline of a note: headings, first sentence of each section, word count, and reading time. Use this as the basis for generating a summary.",
   { path: z.string().describe("Vault-relative path to the note.") },
   async ({ path: noteName }) => {
-    const raw = await fs.readFile(notePath(noteName), "utf-8");
+    const raw = await fs.readFile(await notePath(noteName), "utf-8");
     const { content, data } = matter(raw);
     const lines = content.split("\n");
     const words = tokenize(content).length;
@@ -600,10 +711,10 @@ server.tool(
   "Suggest existing vault notes that the given note should link to, based on content and title overlap. Returns ranked candidates not already linked.",
   {
     path: z.string().describe("Vault-relative path to the note."),
-    limit: z.number().optional().describe("Max suggestions to return. Defaults to 10."),
+    limit: z.number().int().min(1).optional().describe("Max suggestions to return. Defaults to 10."),
   },
   async ({ path: noteName, limit = 10 }) => {
-    const fullPath = notePath(noteName);
+    const fullPath = await notePath(noteName);
     const sourceRaw = await fs.readFile(fullPath, "utf-8");
     const sourceTokens = new Set(tokenize(matter(sourceRaw).content));
     const sourceLinks = new Set(parseWikilinks(sourceRaw).map((l) => l.toLowerCase()));
@@ -620,7 +731,6 @@ server.tool(
       const raw = await fs.readFile(file, "utf-8");
       const titleTokens = new Set(tokenize(stem));
       const contentTokens = new Set(tokenize(matter(raw).content));
-      const allTokens = new Set([...titleTokens, ...contentTokens]);
 
       // Score: weighted combination of title overlap and content overlap
       const titleScore = jaccardSimilarity(sourceTokens, titleTokens) * 3; // title match weighted 3×
@@ -652,7 +762,7 @@ server.tool(
     destination: z.string().optional().describe("Vault-relative path to write the MOC note. Omit to return without saving."),
   },
   async ({ folder, destination }) => {
-    const searchRoot = notePath(folder);
+    const searchRoot = await notePath(folder);
     const files = await collectMarkdownFiles(searchRoot);
 
     const sections = [];
@@ -669,7 +779,7 @@ server.tool(
     const moc = `# Map of Contents — ${folder}\n*Generated: ${formatDate()}*\n\n${sections.join("\n\n")}`;
 
     if (destination) {
-      const destPath = notePath(destination);
+      const destPath = await notePath(destination);
       await fs.mkdir(path.dirname(destPath), { recursive: true });
       await fs.writeFile(destPath, moc, "utf-8");
       return { content: [{ type: "text", text: `MOC written to: ${destination}` }] };
@@ -683,11 +793,11 @@ server.tool(
   "find_duplicates",
   "Identify pairs of notes with highly similar content using Jaccard similarity. Returns pairs above the similarity threshold.",
   {
-    threshold: z.number().optional().describe("Similarity threshold between 0 and 1. Defaults to 0.5."),
+    threshold: z.number().min(0).max(1).optional().describe("Similarity threshold between 0 and 1. Defaults to 0.5."),
     folder: z.string().optional().describe("Limit search to a specific folder."),
   },
   async ({ threshold = 0.5, folder }) => {
-    const searchRoot = folder ? notePath(folder) : VAULT_PATH;
+    const searchRoot = folder ? await notePath(folder) : VAULT_PATH;
     const files = await collectMarkdownFiles(searchRoot);
 
     // Pre-tokenize all files
@@ -755,7 +865,7 @@ server.tool(
       .slice(0, 5)
       .map(([s, c]) => `  ${s} (${c} backlinks)`);
 
-    const topByOut = stems
+    const topByOut = [...stems]
       .sort((a, b) => (outDegree[b] ?? 0) - (outDegree[a] ?? 0))
       .slice(0, 5)
       .map((s) => `  ${s} (${outDegree[s]} outgoing)`);
@@ -778,7 +888,7 @@ server.tool(
 server.tool(
   "get_hub_notes",
   "Return the most-linked-to notes in the vault (the knowledge graph's pillars), ranked by backlink count.",
-  { limit: z.number().optional().describe("Number of hub notes to return. Defaults to 10.") },
+  { limit: z.number().int().min(1).optional().describe("Number of hub notes to return. Defaults to 10.") },
   async ({ limit = 10 }) => {
     const files = await collectMarkdownFiles(VAULT_PATH);
     const inDegree = {};
@@ -832,7 +942,7 @@ server.tool(
 server.tool(
   "get_recently_modified",
   "List notes modified within the last N days, most recent first.",
-  { days: z.number().optional().describe("Lookback window in days. Defaults to 7.") },
+  { days: z.number().int().min(1).optional().describe("Lookback window in days. Defaults to 7.") },
   async ({ days = 7 }) => {
     const files = await collectMarkdownFiles(VAULT_PATH);
     const cutoff = Date.now() - days * 86_400_000;
@@ -868,7 +978,7 @@ server.tool(
     status: z.enum(["all", "open", "done"]).optional().describe("Filter by task status. Defaults to 'all'."),
   },
   async ({ path: noteName, status = "all" }) => {
-    const files = noteName ? [notePath(noteName)] : await collectMarkdownFiles(VAULT_PATH);
+    const files = noteName ? [await notePath(noteName)] : await collectMarkdownFiles(VAULT_PATH);
     const results = [];
 
     for (const file of files) {
@@ -904,11 +1014,14 @@ server.tool(
     task_text: z.string().describe("Exact text of the task to complete (without the checkbox)."),
   },
   async ({ path: noteName, task_text }) => {
-    const fullPath = notePath(noteName);
+    const fullPath = await notePath(noteName);
     const content = await fs.readFile(fullPath, "utf-8");
-    const pattern = `- [ ] ${task_text}`;
-    if (!content.includes(pattern)) throw new Error(`Open task not found: "${task_text}"`);
-    await fs.writeFile(fullPath, content.replace(pattern, `- [x] ${task_text}`), "utf-8");
+    const escaped = task_text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(`^(\\s*)-\\s+\\[ \\]\\s+${escaped}`, "m");
+    const match = content.match(pattern);
+    if (!match) throw new Error(`Open task not found: "${task_text}"`);
+    const updated = content.replace(pattern, `$1- [x] ${task_text}`);
+    await fs.writeFile(fullPath, updated, "utf-8");
     return { content: [{ type: "text", text: `Task completed: "${task_text}"` }] };
   }
 );
@@ -925,7 +1038,7 @@ server.tool(
   async ({ sources, destination, strip_frontmatter = true, separator = "\n---\n" }) => {
     const parts = [];
     for (let i = 0; i < sources.length; i++) {
-      const raw = await fs.readFile(notePath(sources[i]), "utf-8");
+      const raw = await fs.readFile(await notePath(sources[i]), "utf-8");
       if (i > 0 && strip_frontmatter) {
         parts.push(matter(raw).content.trim());
       } else {
@@ -933,7 +1046,13 @@ server.tool(
       }
     }
     const merged = parts.join(separator);
-    const destPath = notePath(destination);
+    const destPath = await notePath(destination);
+    try {
+      await fs.access(destPath);
+      throw new Error(`Destination already exists: ${destination}. Delete it first or choose a different path.`);
+    } catch (e) {
+      if (e.message.startsWith("Destination already exists")) throw e;
+    }
     await fs.mkdir(path.dirname(destPath), { recursive: true });
     await fs.writeFile(destPath, merged + "\n", "utf-8");
     return { content: [{ type: "text", text: `Merged ${sources.length} notes into: ${destination}` }] };
@@ -942,14 +1061,14 @@ server.tool(
 
 server.tool(
   "split_note",
-  "Split a note into multiple notes at a given heading level. Each section becomes its own file.",
+  "Split a note into multiple notes at a given heading level. Each section becomes its own file. The original note is preserved unchanged.",
   {
     path: z.string().describe("Vault-relative path to the note to split."),
-    heading_level: z.number().optional().describe("Heading level to split at (1–6). Defaults to 2."),
+    heading_level: z.number().int().min(1).max(6).optional().describe("Heading level to split at (1–6). Defaults to 2."),
     destination_folder: z.string().optional().describe("Vault-relative folder for the new notes. Defaults to same folder as the source note."),
   },
   async ({ path: noteName, heading_level = 2, destination_folder }) => {
-    const fullPath = notePath(noteName);
+    const fullPath = await notePath(noteName);
     const raw = await fs.readFile(fullPath, "utf-8");
     const { content } = matter(raw);
     const marker = "#".repeat(heading_level) + " ";
@@ -979,10 +1098,24 @@ server.tool(
     }
 
     const created = [];
+    const usedNames = new Set();
     for (const section of sections) {
-      const filename = `${slugify(section.title)}.md`;
+      let baseName = slugify(section.title);
+      let filename = `${baseName}.md`;
+      let suffix = 2;
+      while (usedNames.has(filename.toLowerCase())) {
+        filename = `${baseName}_${suffix}.md`;
+        suffix++;
+      }
+      usedNames.add(filename.toLowerCase());
       const relPath = path.join(destFolder, filename);
-      const sectionPath = notePath(relPath);
+      const sectionPath = await notePath(relPath);
+      try {
+        await fs.access(sectionPath);
+        throw new Error(`Split would overwrite existing note: ${relPath}. Delete it first or use a different destination folder.`);
+      } catch (e) {
+        if (e.message.startsWith("Split would overwrite")) throw e;
+      }
       await fs.mkdir(path.dirname(sectionPath), { recursive: true });
       await fs.writeFile(sectionPath, section.content + "\n", "utf-8");
       created.push(relPath);
@@ -1016,7 +1149,7 @@ server.tool(
     ).describe("Filter conditions (all must match)."),
     sort_by: z.string().optional().describe("Frontmatter field to sort results by."),
     sort_order: z.enum(["asc", "desc"]).optional().describe("Sort direction. Defaults to 'asc'."),
-    limit: z.number().optional().describe("Maximum number of results to return."),
+    limit: z.number().int().min(1).optional().describe("Maximum number of results to return."),
   },
   async ({ where, sort_by, sort_order = "asc", limit }) => {
     const files = await collectMarkdownFiles(VAULT_PATH);
@@ -1083,11 +1216,11 @@ server.tool(
   {
     date_field: z.string().optional().describe("Frontmatter field containing the date. Defaults to 'date'."),
     order: z.enum(["asc", "desc"]).optional().describe("Sort order. Defaults to 'desc' (newest first)."),
-    limit: z.number().optional().describe("Maximum number of results."),
+    limit: z.number().int().min(1).optional().describe("Maximum number of results."),
     folder: z.string().optional().describe("Limit to a specific folder."),
   },
   async ({ date_field = "date", order = "desc", limit, folder }) => {
-    const searchRoot = folder ? notePath(folder) : VAULT_PATH;
+    const searchRoot = folder ? await notePath(folder) : VAULT_PATH;
     const files = await collectMarkdownFiles(searchRoot);
     const entries = [];
 
@@ -1264,7 +1397,7 @@ server.tool(
   async ({ path: noteName }) => {
     const files = await collectMarkdownFiles(VAULT_PATH);
     const existingStems = new Set(files.map((f) => path.basename(f, ".md").toLowerCase()));
-    const raw = await fs.readFile(notePath(noteName), "utf-8");
+    const raw = await fs.readFile(await notePath(noteName), "utf-8");
     const { content } = matter(raw);
 
     const candidates = new Set();
@@ -1304,7 +1437,7 @@ server.tool(
     path: z.string().describe("Vault-relative path to the note."),
   },
   async ({ path: noteName }) => {
-    const raw = await fs.readFile(notePath(noteName), "utf-8");
+    const raw = await fs.readFile(await notePath(noteName), "utf-8");
     const { content } = matter(raw);
 
     const wikilinks   = parseWikilinks(raw);
@@ -1346,7 +1479,7 @@ server.tool(
     const allLinks = new Set();
 
     for (const src of sources) {
-      const raw = await fs.readFile(notePath(src), "utf-8");
+      const raw = await fs.readFile(await notePath(src), "utf-8");
       const { content, data } = matter(raw);
       const stem = path.basename(src, ".md");
 
@@ -1366,23 +1499,22 @@ server.tool(
       );
     }
 
-    const frontmatter = [
-      "---",
-      `title: "${title}"`,
-      `date: ${formatDate()}`,
-      `sources: [${sources.map((s) => `"${path.basename(s, ".md")}"`).join(", ")}]`,
-      allTags.size ? `tags: [${[...allTags].join(", ")}]` : null,
-      "---",
-    ].filter(Boolean).join("\n");
+    const fmData = {
+      title,
+      date: formatDate(),
+      sources: sources.map((s) => path.basename(s, ".md")),
+    };
+    if (allTags.size) fmData.tags = [...allTags];
 
     const relatedLinks = allLinks.size
       ? `\n## Related Concepts\n${[...allLinks].map((l) => `- [[${l}]]`).join("\n")}`
       : "";
 
-    const note = `${frontmatter}\n\n# ${title}\n\n${sections.join("\n\n")}${relatedLinks}\n`;
+    const bodyContent = `# ${title}\n\n${sections.join("\n\n")}${relatedLinks}\n`;
+    const note = matter.stringify(bodyContent, fmData);
 
     if (destination) {
-      const destPath = notePath(destination);
+      const destPath = await notePath(destination);
       await fs.mkdir(path.dirname(destPath), { recursive: true });
       await fs.writeFile(destPath, note, "utf-8");
       return { content: [{ type: "text", text: `Summary note written to: ${destination}` }] };
@@ -1399,7 +1531,7 @@ server.tool(
     path: z.string().describe("Vault-relative path to the note."),
   },
   async ({ path: noteName }) => {
-    const raw = await fs.readFile(notePath(noteName), "utf-8");
+    const raw = await fs.readFile(await notePath(noteName), "utf-8");
     const { content, data } = matter(raw);
     const lines = content.split("\n");
 
@@ -1459,12 +1591,12 @@ server.tool(
   "cluster_notes",
   "Group all vault notes into thematic clusters based on shared vocabulary. Uses union-find on Jaccard similarity.",
   {
-    threshold: z.number().optional().describe("Minimum similarity to place two notes in the same cluster (0–1). Defaults to 0.15."),
+    threshold: z.number().min(0).max(1).optional().describe("Minimum similarity to place two notes in the same cluster (0–1). Defaults to 0.15."),
     folder: z.string().optional().describe("Limit clustering to a specific folder."),
-    min_cluster_size: z.number().optional().describe("Only return clusters with at least this many notes. Defaults to 2."),
+    min_cluster_size: z.number().int().min(1).optional().describe("Only return clusters with at least this many notes. Defaults to 2."),
   },
   async ({ threshold = 0.15, folder, min_cluster_size = 2 }) => {
-    const searchRoot = folder ? notePath(folder) : VAULT_PATH;
+    const searchRoot = folder ? await notePath(folder) : VAULT_PATH;
     const files = await collectMarkdownFiles(searchRoot);
 
     const tokenSets = await Promise.all(
@@ -1508,12 +1640,12 @@ server.tool(
   "Find notes most thematically similar to a given note, ranked by content overlap. Broader than suggest_links — includes already-linked notes.",
   {
     path: z.string().describe("Vault-relative path to the source note."),
-    limit: z.number().optional().describe("Max results to return. Defaults to 10."),
+    limit: z.number().int().min(1).optional().describe("Max results to return. Defaults to 10."),
   },
   async ({ path: noteName, limit = 10 }) => {
     const files = await collectMarkdownFiles(VAULT_PATH);
     const sourceStem = path.basename(noteName, ".md").toLowerCase();
-    const sourceTokens = new Set(tokenize(matter(await fs.readFile(notePath(noteName), "utf-8")).content));
+    const sourceTokens = new Set(tokenize(matter(await fs.readFile(await notePath(noteName), "utf-8")).content));
 
     const scored = [];
     for (const file of files) {
@@ -1545,8 +1677,8 @@ server.tool(
     path_b: z.string().describe("Vault-relative path to the second note."),
   },
   async ({ path_a, path_b }) => {
-    const rawA = await fs.readFile(notePath(path_a), "utf-8");
-    const rawB = await fs.readFile(notePath(path_b), "utf-8");
+    const rawA = await fs.readFile(await notePath(path_a), "utf-8");
+    const rawB = await fs.readFile(await notePath(path_b), "utf-8");
     const parsedA = matter(rawA);
     const parsedB = matter(rawB);
 
@@ -1590,10 +1722,10 @@ server.tool(
   "Track how a note has evolved over time using git history. Returns word count, heading count, and link count per commit. Falls back to current stats if the vault isn't a git repo.",
   {
     path: z.string().describe("Vault-relative path to the note."),
-    limit: z.number().optional().describe("Max number of commits to inspect. Defaults to 10."),
+    limit: z.number().int().min(1).max(100).optional().describe("Max number of commits to inspect (1–100). Defaults to 10."),
   },
   async ({ path: noteName, limit = 10 }) => {
-    const fullPath = notePath(noteName);
+    const fullPath = await notePath(noteName);
     const { execFile } = await import("child_process");
     const { promisify } = await import("util");
     const execFileAsync = promisify(execFile);
@@ -1622,8 +1754,10 @@ server.tool(
       };
     }
 
+    // Normalize path separators for git (always uses forward slashes)
+    const gitPath = noteName.split(path.sep).join("/");
     const { stdout: logOut } = await execFileAsync("git", [
-      "-C", VAULT_PATH, "log", `--max-count=${limit}`, "--format=%H %ai %s", "--", noteName,
+      "-C", VAULT_PATH, "log", `--max-count=${limit}`, "--format=%H %as %s", "--", gitPath,
     ]);
 
     const commits = logOut.trim().split("\n").filter(Boolean);
@@ -1637,8 +1771,9 @@ server.tool(
     for (const line of commits) {
       const [hash, date, ...msgParts] = line.split(" ");
       const msg = msgParts.join(" ").slice(0, 40);
+      if (!/^[0-9a-f]{7,40}$/i.test(hash)) continue;
       try {
-        const { stdout: blob } = await execFileAsync("git", ["-C", VAULT_PATH, "show", `${hash}:${noteName}`]);
+        const { stdout: blob } = await execFileAsync("git", ["-C", VAULT_PATH, "show", `${hash}:${gitPath}`]);
         const { content } = matter(blob);
         rows.push(`| ${date.slice(0,10)} | ${tokenize(content).length} | ${content.split("\n").filter((l) => /^#/.test(l)).length} | ${parseWikilinks(blob).length} | ${msg} |`);
       } catch { rows.push(`| ${date.slice(0,10)} | — | — | — | ${msg} (file not present) |`); }
@@ -1656,7 +1791,7 @@ server.tool(
     tag: z.string().optional().describe("Only return quotes from notes with this tag."),
   },
   async ({ path: noteName, tag }) => {
-    const files = noteName ? [notePath(noteName)] : await collectMarkdownFiles(VAULT_PATH);
+    const files = noteName ? [await notePath(noteName)] : await collectMarkdownFiles(VAULT_PATH);
     const results = [];
 
     for (const file of files) {
@@ -1668,8 +1803,8 @@ server.tool(
       const quotes = [];
       let current = [];
       for (const line of parsed.content.split("\n")) {
-        if (line.startsWith("> ")) {
-          current.push(line.slice(2));
+        if (line.startsWith(">")) {
+          current.push(line.startsWith("> ") ? line.slice(2) : line.slice(1));
         } else if (current.length) {
           quotes.push(current.join(" ").trim());
           current = [];
@@ -1696,9 +1831,9 @@ server.tool(
   },
   async ({ path: noteName }) => {
     const ASSERTION_WORDS = /\b(is|are|was|were|shows|show|proves|prove|demonstrates|always|never|must|causes|cause|leads to|results in|increases|decreases|improves|reduces)\b/i;
-    const HAS_SOURCE = /\[\[|\]\]|https?:\/\/|\[@|\(\d{4}\)|ibid|et al/i;
+    const HAS_SOURCE = /\[\[|https?:\/\/|\[@|\(\d{4}\)|ibid|et al/i;
 
-    const files = noteName ? [notePath(noteName)] : await collectMarkdownFiles(VAULT_PATH);
+    const files = noteName ? [await notePath(noteName)] : await collectMarkdownFiles(VAULT_PATH);
     const results = [];
 
     for (const file of files) {
@@ -1737,7 +1872,7 @@ server.tool(
     destination: z.string().optional().describe("Vault-relative path to save the flashcard file (.md or .txt). Omit to return without saving."),
   },
   async ({ path: noteName, destination }) => {
-    const raw = await fs.readFile(notePath(noteName), "utf-8");
+    const raw = await fs.readFile(await notePath(noteName), "utf-8");
     const { content } = matter(raw);
     const lines = content.split("\n");
     const cards = [];
@@ -1796,7 +1931,7 @@ server.tool(
     const output = `## Flashcards: ${path.basename(noteName, ".md")} (${cards.length} cards)\n\n${readableFormat}\n\n---\n*Anki import format (tab-separated):*\n\`\`\`\n${ankiFormat}\n\`\`\``;
 
     if (destination) {
-      const destPath = notePath(destination);
+      const destPath = await notePath(destination);
       await fs.mkdir(path.dirname(destPath), { recursive: true });
       await fs.writeFile(destPath, output, "utf-8");
       return { content: [{ type: "text", text: `Flashcards saved to: ${destination}` }] };
@@ -1820,7 +1955,7 @@ server.tool(
       /^`(.{2,50})`\s*[—:-]\s*(.{10,200})/,
     ];
 
-    const files = noteName ? [notePath(noteName)] : await collectMarkdownFiles(VAULT_PATH);
+    const files = noteName ? [await notePath(noteName)] : await collectMarkdownFiles(VAULT_PATH);
     const definitions = [];
 
     for (const file of files) {
@@ -1850,7 +1985,7 @@ server.tool(
     const output = `# Glossary\n*Generated: ${formatDate()} | ${definitions.length} terms*\n\n${glossary}`;
 
     if (destination) {
-      const destPath = notePath(destination);
+      const destPath = await notePath(destination);
       await fs.mkdir(path.dirname(destPath), { recursive: true });
       await fs.writeFile(destPath, output, "utf-8");
       return { content: [{ type: "text", text: `Glossary saved to: ${destination}` }] };
@@ -1864,7 +1999,7 @@ server.tool(
   "get_review_queue",
   "Find notes that are overdue for review: not modified in N+ days and flagged as active/in-progress via frontmatter.",
   {
-    days: z.number().optional().describe("Notes not modified in this many days are considered overdue. Defaults to 14."),
+    days: z.number().int().min(1).optional().describe("Notes not modified in this many days are considered overdue. Defaults to 14."),
     status_field: z.string().optional().describe("Frontmatter field to check for active status. Defaults to 'status'."),
     active_values: z.array(z.string()).optional().describe("Values that indicate a note is active. Defaults to ['active', 'in-progress', 'wip']."),
   },
@@ -1905,7 +2040,7 @@ server.tool(
   "generate_weekly_review",
   "Compile a weekly review report: notes created/modified, tasks completed and open, new tags, and most active folders.",
   {
-    days: z.number().optional().describe("Lookback window in days. Defaults to 7."),
+    days: z.number().int().min(1).optional().describe("Lookback window in days. Defaults to 7."),
   },
   async ({ days = 7 }) => {
     const files = await collectMarkdownFiles(VAULT_PATH);
@@ -1923,17 +2058,17 @@ server.tool(
       const raw = await fs.readFile(file, "utf-8");
       const parsed = matter(raw);
 
+      // Tasks across entire vault (open) and within review window (done)
+      for (const line of parsed.content.split("\n")) {
+        if (/^(\s*)-\s+\[ \]\s+/.test(line)) openTasks.push({ rel, text: line.trim() });
+        if (mtimeMs >= cutoff && /^(\s*)-\s+\[x\]\s+/i.test(line)) doneTasks.push({ rel, text: line.trim() });
+      }
+
       if (mtimeMs >= cutoff) {
         modified.push({ rel, mtimeMs });
         const folder = path.dirname(rel);
         folderActivity[folder] = (folderActivity[folder] ?? 0) + 1;
         extractTags(parsed).forEach((t) => newTags.add(t));
-      }
-
-      // Tasks across entire vault
-      for (const line of parsed.content.split("\n")) {
-        if (/^(\s*)-\s+\[ \]\s+/.test(line)) openTasks.push({ rel, text: line.trim() });
-        if (/^(\s*)-\s+\[x\]\s+/i.test(line)) doneTasks.push({ rel, text: line.trim() });
       }
     }
 
@@ -1946,7 +2081,7 @@ server.tool(
       `\n## Activity`,
       `- Notes modified: ${modified.length}`,
       `- Open tasks (vault-wide): ${openTasks.length}`,
-      `- Completed tasks (vault-wide): ${doneTasks.length}`,
+      `- Completed tasks (this period): ${doneTasks.length}`,
       modified.length ? `\n## Modified Notes\n${modified.slice(0, 20).map((n) => `- ${new Date(n.mtimeMs).toISOString().slice(0,10)}  ${n.rel}`).join("\n")}` : "",
       openTasks.length ? `\n## Open Tasks (first 20)\n${openTasks.slice(0, 20).map((t) => `- [ ] ${t.rel}: ${t.text.replace(/^\s*-\s+\[ \]\s+/i, "")}`).join("\n")}` : "",
       topFolders.length ? `\n## Most Active Folders\n${topFolders.map(([f, c]) => `- ${f}: ${c} notes`).join("\n")}` : "",
@@ -1962,7 +2097,7 @@ server.tool(
   "Rate notes on a quality rubric: frontmatter completeness, tags, links, body length, heading structure, and summary. Returns a score and breakdown.",
   {
     path: z.string().optional().describe("Vault-relative path to score a single note. Omit to score all notes in the vault."),
-    min_score: z.number().optional().describe("When scoring all notes, only return notes at or below this score (0–100). Defaults to 100 (return all)."),
+    min_score: z.number().min(0).max(100).optional().describe("When scoring all notes, only return notes at or below this score (0–100). Defaults to 100 (return all)."),
   },
   async ({ path: noteName, min_score = 100 }) => {
     const RUBRIC = [
@@ -1996,7 +2131,7 @@ server.tool(
     };
 
     if (noteName) {
-      const result = await scoreFile(notePath(noteName));
+      const result = await scoreFile(await notePath(noteName));
       return {
         content: [{
           type: "text",
@@ -2026,12 +2161,12 @@ server.tool(
   "Infer likely tags for a note by comparing its content to how similar notes in the vault are tagged.",
   {
     path: z.string().describe("Vault-relative path to the note."),
-    limit: z.number().optional().describe("Max tag suggestions to return. Defaults to 10."),
+    limit: z.number().int().min(1).optional().describe("Max tag suggestions to return. Defaults to 10."),
   },
   async ({ path: noteName, limit = 10 }) => {
     const files = await collectMarkdownFiles(VAULT_PATH);
     const sourceStem = path.basename(noteName, ".md").toLowerCase();
-    const sourceRaw = await fs.readFile(notePath(noteName), "utf-8");
+    const sourceRaw = await fs.readFile(await notePath(noteName), "utf-8");
     const sourceParsed = matter(sourceRaw);
     const sourceTokens = new Set(tokenize(sourceParsed.content));
     const existingTags = new Set(extractTags(sourceParsed));
