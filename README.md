@@ -4,7 +4,7 @@
 
 Your notes are full of ideas — but ideas in isolation are just text. **Synapse** is an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that gives Claude a nervous system for your Obsidian vault. It doesn't just read and write files. It traces paths between ideas, surfaces missing connections, clusters notes by theme, flags weak points in your thinking, and helps you see your knowledge graph the way your brain was always meant to.
 
-**56 tools. 9 categories. One vault that finally thinks back.**
+**56 tools. 10 categories. One vault that finally thinks back.**
 
 ---
 

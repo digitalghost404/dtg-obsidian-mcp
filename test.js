@@ -162,10 +162,10 @@ class MCPClient {
   call(method, params = {}) {
     return new Promise((resolve, reject) => {
       const id = this.nextId++;
-      this.pending.set(id, resolve);
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error("timeout")); }, 10000);
+      this.pending.set(id, (msg) => { clearTimeout(timer); resolve(msg); });
       const msg = JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n";
       this.proc.stdin.write(msg);
-      setTimeout(() => { this.pending.delete(id); reject(new Error("timeout")); }, 10000);
     });
   }
 
