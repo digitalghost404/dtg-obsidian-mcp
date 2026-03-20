@@ -637,7 +637,7 @@ server.tool(
   "search_by_tag",
   "Find all notes that contain one or more specified tags (frontmatter or inline #tag).",
   {
-    tags: z.array(z.string()).describe("Tags to search for (without the # prefix)."),
+    tags: z.array(z.string()).min(1).describe("Tags to search for (without the # prefix)."),
     match: z.enum(["any", "all"]).optional().describe("'any': at least one tag matches. 'all': all tags must match. Defaults to 'any'."),
   },
   async ({ tags, match = "any" }) => {
@@ -825,12 +825,11 @@ server.tool(
     const files = await collectMarkdownFiles(searchRoot);
 
     // Pre-tokenize all files
-    const tokenSets = await Promise.all(
-      files.map(async (f) => {
-        const raw = await fs.readFile(f, "utf-8");
-        return new Set(tokenize(matter(raw).content));
-      })
-    );
+    const tokenSets = [];
+    for (const f of files) {
+      const raw = await fs.readFile(f, "utf-8");
+      tokenSets.push(new Set(tokenize(matter(raw).content)));
+    }
 
     const pairs = [];
     for (let i = 0; i < files.length; i++) {
@@ -1060,6 +1059,13 @@ server.tool(
     separator: z.string().optional().describe("Markdown separator inserted between merged notes. Defaults to '\\n---\\n'."),
   },
   async ({ sources, destination, strip_frontmatter = true, separator = "\n---\n" }) => {
+    const destPath = await notePath(destination);
+    try {
+      await fs.access(destPath);
+      throw new Error(`Destination already exists: ${destination}. Delete it first or choose a different path.`);
+    } catch (e) {
+      if (e.message.startsWith("Destination already exists")) throw e;
+    }
     const parts = [];
     for (let i = 0; i < sources.length; i++) {
       const raw = await fs.readFile(await notePath(sources[i]), "utf-8");
@@ -1070,13 +1076,6 @@ server.tool(
       }
     }
     const merged = parts.join(separator);
-    const destPath = await notePath(destination);
-    try {
-      await fs.access(destPath);
-      throw new Error(`Destination already exists: ${destination}. Delete it first or choose a different path.`);
-    } catch (e) {
-      if (e.message.startsWith("Destination already exists")) throw e;
-    }
     await fs.mkdir(path.dirname(destPath), { recursive: true });
     await fs.writeFile(destPath, merged + "\n", "utf-8");
     return { content: [{ type: "text", text: `Merged ${sources.length} notes into: ${destination}` }] };
@@ -1625,9 +1624,10 @@ server.tool(
     const searchRoot = folder ? await notePath(folder) : VAULT_PATH;
     const files = await collectMarkdownFiles(searchRoot);
 
-    const tokenSets = await Promise.all(
-      files.map(async (f) => new Set(tokenize(matter(await fs.readFile(f, "utf-8")).content)))
-    );
+    const tokenSets = [];
+    for (const f of files) {
+      tokenSets.push(new Set(tokenize(matter(await fs.readFile(f, "utf-8")).content)));
+    }
 
     // Union-Find (iterative to avoid stack overflow on large vaults)
     const parent = files.map((_, i) => i);
@@ -1759,7 +1759,7 @@ server.tool(
     // Check if vault is a git repo
     let isGit = false;
     try {
-      await execFileAsync("git", ["-C", VAULT_PATH, "rev-parse", "--git-dir"]);
+      await execFileAsync("git", ["-C", VAULT_ROOT, "rev-parse", "--git-dir"]);
       isGit = true;
     } catch { /* not a git repo */ }
 
@@ -1783,7 +1783,7 @@ server.tool(
     // Normalize path separators for git (always uses forward slashes)
     const gitPath = noteName.split(path.sep).join("/");
     const { stdout: logOut } = await execFileAsync("git", [
-      "-C", VAULT_PATH, "log", `--max-count=${limit}`, "--format=%H %as %s", "--", gitPath,
+      "-C", VAULT_ROOT, "log", `--max-count=${limit}`, "--format=%H %as %s", "--", gitPath,
     ]);
 
     const commits = logOut.trim().split("\n").filter(Boolean);
@@ -1803,7 +1803,7 @@ server.tool(
       const msg = line.slice(sp2 + 1).slice(0, 40);
       if (!/^[0-9a-f]{7,40}$/i.test(hash)) continue;
       try {
-        const { stdout: blob } = await execFileAsync("git", ["-C", VAULT_PATH, "show", `${hash}:${gitPath}`]);
+        const { stdout: blob } = await execFileAsync("git", ["-C", VAULT_ROOT, "show", `${hash}:${gitPath}`]);
         const { content } = matter(blob);
         rows.push(`| ${date.slice(0,10)} | ${tokenize(content).length} | ${content.split("\n").filter((l) => /^#/.test(l)).length} | ${parseWikilinks(blob).length} | ${msg} |`);
       } catch { rows.push(`| ${date.slice(0,10)} | — | — | — | ${msg} (file not present) |`); }
@@ -2161,7 +2161,8 @@ server.tool(
     }
 
     const files = await collectMarkdownFiles(VAULT_PATH);
-    const scores = await Promise.all(files.map(scoreFile));
+    const scores = [];
+    for (const file of files) scores.push(await scoreFile(file));
     scores.sort((a, b) => a.score - b.score);
     const filtered = scores.filter((s) => Math.round(s.score / s.max * 100) <= min_score);
 
