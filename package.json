@@ -1,17 +1,21 @@
 {
   "name": "obsidian-mcp",
-  "version": "1.0.0",
-  "description": "",
+  "version": "3.0.0",
+  "description": "Synapse — an MCP server that gives Claude a nervous system for your Obsidian vault.",
   "main": "index.js",
   "type": "module",
-  "scripts": {
-    "start": "node index.js"
+  "bin": {
+    "obsidian-mcp": "./index.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "MIT AND Commons-Clause",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node test.js"
+  },
+  "keywords": ["mcp", "obsidian", "vault", "knowledge-management"],
+  "author": "digitalghost404",
+  "license": "SEE LICENSE IN LICENSE",
   "engines": {
-    "node": ">=25.8.1"
+    "node": ">=18.0.0"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
