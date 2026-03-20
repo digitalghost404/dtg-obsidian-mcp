@@ -509,7 +509,8 @@ server.tool(
         throw e;
       }
     }
-    await fs.access(fullPath);
+    const stat = await fs.stat(fullPath);
+    if (!stat.isDirectory()) throw new Error(`Not a folder: ${folderName}. Use delete_note to delete files.`);
     if (force) {
       await fs.rm(fullPath, { recursive: true, force: true });
     } else {
@@ -771,7 +772,7 @@ server.tool(
       const contentScore = jaccardSimilarity(sourceTokens, contentTokens);
       const score = titleScore + contentScore;
 
-      if (score > 0.02) candidates.push({ rel, score: Math.round(score * 1000) / 1000 });
+      if (score > 0.02) candidates.push({ rel, score: Math.round(score * 1000) / 1000 }); // noise floor — skip near-zero similarity
     }
 
     candidates.sort((a, b) => b.score - a.score);
@@ -1132,6 +1133,11 @@ server.tool(
       return { content: [{ type: "text", text: `No level-${heading_level} headings found in ${noteName}.` }] };
     }
 
+    // Check for pre-heading content that won't be included in any split file
+    const firstHeadingIdx = content.split("\n").findIndex((l) => l.startsWith(marker) && !l.startsWith(marker + "#"));
+    const preHeading = content.split("\n").slice(0, firstHeadingIdx).join("\n").trim();
+    const droppedWarning = preHeading ? `\n\n⚠ Note: ${preHeading.split("\n").length} line(s) of content before the first heading were not included in any split file.` : "";
+
     const created = [];
     const usedNames = new Set();
     for (const section of sections) {
@@ -1159,7 +1165,7 @@ server.tool(
     return {
       content: [{
         type: "text",
-        text: `Split into ${created.length} notes:\n${created.join("\n")}`,
+        text: `Split into ${created.length} notes:\n${created.join("\n")}${droppedWarning}`,
       }],
     };
   }
@@ -1843,7 +1849,7 @@ server.tool(
       let current = [];
       for (const line of parsed.content.split("\n")) {
         if (line.startsWith(">")) {
-          current.push(line.startsWith("> ") ? line.slice(2) : line.slice(1));
+          current.push(line.replace(/^(>\s?)+/, ""));
         } else if (current.length) {
           quotes.push(current.join(" ").trim());
           current = [];
@@ -1878,6 +1884,8 @@ server.tool(
     for (const file of files) {
       const raw = await fs.readFile(file, "utf-8");
       const { content } = matter(raw);
+      // Calculate line offset so reported line numbers are file-relative
+      const fmLineCount = raw.indexOf(content) > 0 ? raw.slice(0, raw.indexOf(content)).split("\n").length - 1 : 0;
       const flagged = [];
 
       let inCodeBlock = false;
@@ -1892,7 +1900,7 @@ server.tool(
         for (const sentence of sentences) {
           if (sentence.split(" ").length < 5) continue; // too short to be a claim
           if (ASSERTION_WORDS.test(sentence) && !HAS_SOURCE.test(sentence)) {
-            flagged.push(`  L${i + 1}: ${sentence.trim().slice(0, 120)}`);
+            flagged.push(`  L${i + 1 + fmLineCount}: ${sentence.trim().slice(0, 120)}`);
           }
         }
       }
@@ -2106,8 +2114,8 @@ server.tool(
 
       // Tasks across entire vault (open) and within review window (done)
       for (const line of parsed.content.split("\n")) {
-        if (/^(\s*)-\s+\[ \]\s+/.test(line)) openTasks.push({ rel, text: line.trim() });
-        if (mtimeMs >= cutoff && /^(\s*)-\s+\[x\]\s+/i.test(line)) doneTasks.push({ rel, text: line.trim() });
+        if (/^(\s*)-\s+\[ \]\s+(.+)/.test(line)) openTasks.push({ rel, text: line.trim() });
+        if (mtimeMs >= cutoff && /^(\s*)-\s+\[x\]\s+(.+)/i.test(line)) doneTasks.push({ rel, text: line.trim() });
       }
 
       if (mtimeMs >= cutoff) {
@@ -2214,7 +2222,7 @@ server.tool(
 
       const tokens = new Set(tokenize(parsed.content));
       const sim = jaccardSimilarity(sourceTokens, tokens);
-      if (sim < 0.05) continue;
+      if (sim < 0.05) continue; // noise floor — skip near-zero similarity
 
       for (const tag of tags) {
         if (existingTags.has(tag)) continue;
