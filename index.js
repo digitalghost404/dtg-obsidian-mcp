@@ -169,11 +169,11 @@ function bfsPath(graph, startStem, endStem) {
   const queue = [[startStem]];
   const visited = new Set([startStem]);
   while (queue.length) {
-    const path = queue.shift();
-    const current = path[path.length - 1];
+    const route = queue.shift();
+    const current = route[route.length - 1];
     for (const neighbor of graph[current] ?? []) {
       if (visited.has(neighbor)) continue;
-      const newPath = [...path, neighbor];
+      const newPath = [...route, neighbor];
       if (neighbor === endStem) return newPath;
       visited.add(neighbor);
       queue.push(newPath);
@@ -303,8 +303,10 @@ server.tool(
     let updatedCount = 0;
     if (oldStem !== newStem) {
       const files = await collectMarkdownFiles(VAULT_ROOT);
+      const normalizedTo = path.normalize(toRelative(toPath));
       const escapedStem = oldStem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       for (const file of files) {
+        if (path.normalize(toRelative(file)) === normalizedTo) continue;
         const content = await fs.readFile(file, "utf-8");
         const linkPattern = new RegExp(`\\[\\[${escapedStem}(\\|[^\\]]*)?\\]\\]`, "gi");
         const updated = content.replace(linkPattern, `[[${newStem}$1]]`);
@@ -509,7 +511,9 @@ server.tool(
         throw e;
       }
     }
-    const stat = await fs.stat(fullPath);
+    let stat;
+    try { stat = await fs.stat(fullPath); }
+    catch (e) { if (e.code === "ENOENT") throw new Error(`Folder not found: ${folderName}`); throw e; }
     if (!stat.isDirectory()) throw new Error(`Not a folder: ${folderName}. Use delete_note to delete files.`);
     if (force) {
       await fs.rm(fullPath, { recursive: true, force: true });
@@ -595,7 +599,7 @@ server.tool(
     template: z.string().describe("Vault-relative path to the template note."),
     destination: z.string().describe("Vault-relative path for the new note."),
     title: z.string().optional().describe("Value for {{title}}. Defaults to the destination filename stem."),
-    extra_vars: z.record(z.string(), z.string()).optional().describe("Additional {{key}} substitutions."),
+    extra_vars: z.record(z.string(), z.string()).optional().describe("Additional {{key}} substitutions. Keys 'title' and 'date' are reserved."),
   },
   async ({ template, destination, title, extra_vars = {} }) => {
     const destPath = await notePath(destination);
@@ -1815,7 +1819,7 @@ server.tool(
       if (sp1 < 0 || sp2 < 0) continue;
       const hash = line.slice(0, sp1);
       const date = line.slice(sp1 + 1, sp2);
-      const msg = line.slice(sp2 + 1).slice(0, 40);
+      const msg = line.slice(sp2 + 1).slice(0, 40).replace(/\|/g, "\\|");
       if (!/^[0-9a-f]{7,40}$/i.test(hash)) continue;
       try {
         const { stdout: blob } = await execFileAsync("git", ["-C", VAULT_ROOT, "show", `${hash}:${gitPath}`]);
@@ -1883,9 +1887,11 @@ server.tool(
 
     for (const file of files) {
       const raw = await fs.readFile(file, "utf-8");
-      const { content } = matter(raw);
+      const parsed = matter(raw);
+      const content = parsed.content;
       // Calculate line offset so reported line numbers are file-relative
-      const fmLineCount = raw.indexOf(content) > 0 ? raw.slice(0, raw.indexOf(content)).split("\n").length - 1 : 0;
+      // gray-matter's .matter contains the raw YAML string (without delimiters)
+      const fmLineCount = parsed.matter ? parsed.matter.split("\n").length + 2 : 0; // +2 for --- delimiters
       const flagged = [];
 
       let inCodeBlock = false;
