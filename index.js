@@ -307,8 +307,8 @@ server.tool(
       for (const file of files) {
         const content = await fs.readFile(file, "utf-8");
         const linkPattern = new RegExp(`\\[\\[${escapedStem}(\\|[^\\]]*)?\\]\\]`, "gi");
-        if (linkPattern.test(content)) {
-          const updated = content.replace(linkPattern, `[[${newStem}$1]]`);
+        const updated = content.replace(linkPattern, `[[${newStem}$1]]`);
+        if (updated !== content) {
           await fs.writeFile(file, updated, "utf-8");
           updatedCount++;
         }
@@ -1096,7 +1096,7 @@ server.tool(
 
 server.tool(
   "split_note",
-  "Split a note into multiple notes at a given heading level. Each section becomes its own file. The original note is preserved unchanged.",
+  "Split a note into multiple notes at a given heading level. Each section becomes its own file. The original note is preserved unchanged. Content before the first matching heading is not included in any split file.",
   {
     path: z.string().describe("Vault-relative path to the note to split."),
     heading_level: z.number().int().min(1).max(6).optional().describe("Heading level to split at (1–6). Defaults to 2."),

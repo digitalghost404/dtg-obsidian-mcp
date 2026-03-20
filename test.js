@@ -248,6 +248,15 @@ await test("append_to_note",  () => client.tool("append_to_note", { path: `${T}/
 await test("patch_note",      () => client.tool("patch_note",  { path: `${T}/Write Test.md`, search: "Hello.", replace: "Hello, world." }), { contains: "Patched" });
 await test("rename_note",     () => client.tool("rename_note", { from: `${T}/Write Test.md`, to: `${T}/Renamed Test.md` }), { contains: "Moved" });
 await test("delete_note",     () => client.tool("delete_note", { path: `${T}/Renamed Test.md` }), { contains: "Deleted" });
+// Test backlink update: create a note linking to "LinkTarget", rename it, verify the link was updated
+await client.tool("write_note", { path: `${T}/LinkTarget.md`, content: "# Link Target\nContent." });
+await client.tool("write_note", { path: `${T}/Linker.md`, content: "# Linker\nSee [[LinkTarget]] and [[LinkTarget|alias]] for details." });
+await test("rename_note (backlinks)", () => client.tool("rename_note", { from: `${T}/LinkTarget.md`, to: `${T}/LinkRenamed.md` }), { contains: "Updated backlinks in 1" });
+// Verify the linking note was actually updated
+await test("backlinks updated in file", () => client.tool("read_note", { path: `${T}/Linker.md` }), { contains: "[[LinkRenamed]]" });
+// Cleanup
+await client.tool("delete_note", { path: `${T}/LinkRenamed.md` });
+await client.tool("delete_note", { path: `${T}/Linker.md` });
 
 // ── Frontmatter & Metadata ───────────────────────────────────────────────────
 console.log(B("\nFrontmatter & Metadata"));
