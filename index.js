@@ -207,6 +207,21 @@ const server = new McpServer({
   version: "3.0.0",
 });
 
+// Required for OpenCode MCP client compatibility
+server.setResourceRequestHandlers();
+server.setPromptRequestHandlers();
+
+// ─── Tool filter ──────────────────────────────────────────────────────────────
+const ENABLED_TOOLS = process.env.ENABLED_TOOLS
+  ? new Set(process.env.ENABLED_TOOLS.split(",").map(t => t.trim()))
+  : null;
+
+const _originalTool = server.tool.bind(server);
+server.tool = (name, ...args) => {
+  if (ENABLED_TOOLS && !ENABLED_TOOLS.has(name)) return;
+  return _originalTool(name, ...args);
+};
+
 // ══════════════════════════════════════════════════════════════════════════════
 // NOTE MANAGEMENT
 // ══════════════════════════════════════════════════════════════════════════════
