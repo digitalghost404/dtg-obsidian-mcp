@@ -5,9 +5,12 @@
  */
 
 import { spawn } from "child_process";
+import assert from "node:assert/strict";
 import fs from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
+import { VaultCache } from "./lib/cache.js";
+import { registerNotesTools } from "./lib/notes.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 if (!process.env.VAULT_PATH) {
@@ -16,6 +19,34 @@ if (!process.env.VAULT_PATH) {
 }
 const VAULT_PATH = process.env.VAULT_PATH;
 const TEST_DIR = path.join(VAULT_PATH, "__synapse_test__");
+
+function recordResult(name, pass, textOrError) {
+  if (pass) {
+    results.push({ name, pass: true, text: textOrError });
+    return;
+  }
+
+  results.push({ name, pass: false, error: textOrError });
+}
+
+async function unitTest(name, fn) {
+  try {
+    await fn();
+    recordResult(name, true, "ok");
+  } catch (error) {
+    recordResult(name, false, error.message);
+  }
+}
+
+function createRecordingServer() {
+  const handlers = new Map();
+  return {
+    handlers,
+    tool(name, _description, _schema, handler) {
+      handlers.set(name, handler);
+    },
+  };
+}
 
 // ─── Colours ──────────────────────────────────────────────────────────────────
 const G = (s) => `\x1b[32m${s}\x1b[0m`;
@@ -238,6 +269,71 @@ await client.start();
 
 const T = "__synapse_test__";
 
+// ── Cache Unit Tests ──────────────────────────────────────────────────────────
+console.log(B("Cache"));
+await unitTest("cache get/set/expire", async () => {
+  const cache = new VaultCache(5, 10);
+  cache.set("alpha", 123, 10);
+  assert.equal(cache.get("alpha"), 123);
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.equal(cache.get("alpha"), null);
+  assert.deepEqual(cache.stats(), { size: 0, hits: 1, misses: 1 });
+});
+
+await unitTest("cache LRU eviction", async () => {
+  const cache = new VaultCache(2, 1000);
+  cache.set("a", 1);
+  cache.set("b", 2);
+  assert.equal(cache.get("a"), 1);
+  cache.set("c", 3);
+  assert.equal(cache.get("b"), null);
+  assert.equal(cache.get("a"), 1);
+  assert.equal(cache.get("c"), 3);
+});
+
+await unitTest("cache invalidate patterns", async () => {
+  const cache = new VaultCache(10, 1000);
+  cache.set("search:one", 1);
+  cache.set("search:two", 2);
+  cache.set("query:one", 3);
+  cache.set("exact", 4);
+
+  cache.invalidate("search:*");
+  assert.equal(cache.get("search:one"), null);
+  assert.equal(cache.get("search:two"), null);
+  assert.equal(cache.get("query:one"), 3);
+
+  cache.invalidate("exact");
+  assert.equal(cache.get("exact"), null);
+
+  cache.invalidate("*");
+  assert.equal(cache.get("query:one"), null);
+  assert.equal(cache.stats().size, 0);
+});
+
+await unitTest("write tools invalidate cache", async () => {
+  const invalidations = [];
+  const cache = { invalidate: (pattern) => invalidations.push(pattern) };
+  const server = createRecordingServer();
+  registerNotesTools(server, cache);
+
+  const writeNote = server.handlers.get("write_note");
+  const appendNote = server.handlers.get("append_to_note");
+  const patchNote = server.handlers.get("patch_note");
+  const renameNote = server.handlers.get("rename_note");
+  const deleteNote = server.handlers.get("delete_note");
+
+  assert.ok(writeNote && appendNote && patchNote && renameNote && deleteNote, "Missing write handlers");
+
+  await writeNote({ path: `${T}/Cache Write.md`, content: "Hello" });
+  await appendNote({ path: `${T}/Cache Write.md`, content: "world" });
+  await patchNote({ path: `${T}/Cache Write.md`, search: "world", replace: "cache" });
+  await renameNote({ from: `${T}/Cache Write.md`, to: `${T}/Cache Write Renamed.md` });
+  await deleteNote({ path: `${T}/Cache Write Renamed.md` });
+
+  assert.deepEqual(invalidations, ["*", "*", "*", "*", "*"]);
+});
+
 // ── Note Management ──────────────────────────────────────────────────────────
 console.log(B("Note Management"));
 await test("list_notes",      () => client.tool("list_notes"), { contains: "Note A.md" });
@@ -263,6 +359,28 @@ console.log(B("\nFrontmatter & Metadata"));
 await test("get_frontmatter", () => client.tool("get_frontmatter", { path: `${T}/Note A.md` }), { contains: "2025-01-15" });
 await test("set_frontmatter", () => client.tool("set_frontmatter", { path: `${T}/Note A.md`, fields: { reviewed: true } }), { contains: "Frontmatter updated" });
 await test("list_tags",       () => client.tool("list_tags"), { contains: "science" });
+await test("list_tags cached second call", async () => {
+  const first = await client.tool("list_tags");
+  const cachedNote = path.join(VAULT_PATH, T, "Cache Tags.md");
+  await fs.writeFile(cachedNote, "---\ntags: [cachedtag]\n---\n# Cached tag\n", "utf-8");
+
+  const second = await client.tool("list_tags");
+  const secondText = second?.result?.content?.[0]?.text ?? "";
+  if (secondText.includes("cachedtag")) {
+    throw new Error("Expected second list_tags call to use cached result");
+  }
+
+  await client.tool("write_note", { path: `${T}/Cache Invalidate.md`, content: "# invalidate" });
+  const third = await client.tool("list_tags");
+  const thirdText = third?.result?.content?.[0]?.text ?? "";
+  if (!thirdText.includes("cachedtag")) {
+    throw new Error("Expected list_tags cache to invalidate after write_note");
+  }
+
+  await fs.rm(cachedNote, { force: true });
+  await client.tool("delete_note", { path: `${T}/Cache Invalidate.md` });
+  return third;
+}, { contains: "cachedtag" });
 
 // ── Links & Graph ────────────────────────────────────────────────────────────
 console.log(B("\nLinks & Graph"));
