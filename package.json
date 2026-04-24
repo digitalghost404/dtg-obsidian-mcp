@@ -21,5 +21,10 @@
     "@modelcontextprotocol/sdk": "^1.27.1",
     "gray-matter": "^4.0.3",
     "zod": "^4.3.6"
+  },
+  "overrides": {
+    "@hono/node-server": "^1.19.14",
+    "hono": "^4.12.14",
+    "path-to-regexp": "^8.4.2"
   }
 }
